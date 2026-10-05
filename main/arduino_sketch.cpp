@@ -2053,7 +2053,109 @@ static esp_err_t webPacketStreamHandler(httpd_req_t* req) {
         return false;
     }
 
+struct HelmetReport {
+    char src[48];
+    char motion[16];
+    char fall[16];
+    char pulse[16];
+    char body[24];
+    char amb[24];
+    char rh[24];
+    char voc[24];
+    char co[24];
+    char nh3[24];
+    char no2[24];
+    unsigned long updatedMs;
+};
+static HelmetReport g_helmet = {};
+
+static void helmetTake(const char* text, const char* key, char* dst, size_t n) {
+    const char* p = strstr(text, key);
+    if (!p) return;
+    p += strlen(key);
+    size_t i = 0;
+    while (*p && *p != ',' && *p != '\r' && *p != '\n' && i + 1 < n) dst[i++] = *p++;
+    dst[i] = '\0';
+    if (i) g_helmet.updatedMs = millis();
+}
+
+static void ingestHelmetText(const char* src, const char* payload) {
+    if (!payload || !payload[0]) return;
+    const char* body = payload;
+    const char* tag = strstr(payload, "udpr<");
+    if (tag) {
+        const char* ip = tag + 5;
+        const char* end = strchr(ip, '>');
+        if (end && end - ip < (int)sizeof(g_helmet.src)) {
+            int n = (int)(end - ip);
+            strncpy(g_helmet.src, ip, n);
+            g_helmet.src[n] = '\0';
+            body = end + 1;
+            if (*body == ':') body++;
+        }
+    } else if (src && src[0]) {
+        strncpy(g_helmet.src, src, sizeof(g_helmet.src) - 1);
+    }
+    helmetTake(body, "motion:", g_helmet.motion, sizeof(g_helmet.motion));
+    helmetTake(body, "fall:", g_helmet.fall, sizeof(g_helmet.fall));
+    helmetTake(body, "pulse:", g_helmet.pulse, sizeof(g_helmet.pulse));
+    helmetTake(body, "body:", g_helmet.body, sizeof(g_helmet.body));
+    helmetTake(body, "amb:", g_helmet.amb, sizeof(g_helmet.amb));
+    helmetTake(body, "rh:", g_helmet.rh, sizeof(g_helmet.rh));
+    helmetTake(body, "voc:", g_helmet.voc, sizeof(g_helmet.voc));
+    helmetTake(body, "co:", g_helmet.co, sizeof(g_helmet.co));
+    helmetTake(body, "nh3:", g_helmet.nh3, sizeof(g_helmet.nh3));
+    helmetTake(body, "no2:", g_helmet.no2, sizeof(g_helmet.no2));
+}
+
+static const char HELMET_HTML[] =
+    "<!DOCTYPE html><html><head><meta charset='utf-8'>"
+    "<meta name='viewport' content='width=device-width,initial-scale=1'>"
+    "<title>Smart Helmet</title><style>"
+    "body{font-family:sans-serif;background:#101418;color:#e8eef2;margin:0}"
+    "header{padding:16px 20px;background:#182028}h1{margin:0;font-size:22px}"
+    ".meta{color:#9ab;font-size:13px;margin-top:6px}"
+    ".grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:12px;padding:16px}"
+    ".card{background:#1c2630;border-radius:10px;padding:14px}"
+    ".k{color:#8aa;font-size:12px;text-transform:uppercase}.v{font-size:28px;margin-top:6px}"
+    ".bad{color:#f66}.warn{color:#fc6}.ok{color:#6d6}"
+    "</style></head><body><header><h1>Smart Helmet</h1>"
+    "<div class='meta' id='meta'>waiting</div></header><div class='grid' id='grid'></div>"
+    "<script>"
+    "const keys=['motion','fall','pulse','body','amb','rh','voc','co','nh3','no2'];"
+    "function cls(k,v){if(k=='fall'&&v=='yes')return 'bad';if(k=='pulse'&&(v=='rising'||v=='falling'))return 'warn';return 'ok';}"
+    "function paint(d){document.getElementById('meta').textContent=(d.src||'-')+'  '+(d.age_s==null?'':d.age_s+'s ago');"
+    "document.getElementById('grid').innerHTML=keys.map(k=>'<div class=\"card\"><div class=\"k\">'+k+'</div><div class=\"v '+cls(k,d[k]||'')+'\">'+(d[k]||'-')+'</div></div>').join('');}"
+    "function tick(){fetch('/api/helmet').then(r=>r.json()).then(paint).catch(()=>{});}"
+    "tick();setInterval(tick,2000);</script></body></html>";
+
+static esp_err_t webHelmetApiHandler(httpd_req_t* req) {
+    unsigned long age = g_helmet.updatedMs ? (millis() - g_helmet.updatedMs) / 1000UL : 0;
+    String body = "{";
+    body += "\"src\":\"" + jsonEscape(g_helmet.src) + "\"";
+    body += ",\"motion\":\"" + jsonEscape(g_helmet.motion) + "\"";
+    body += ",\"fall\":\"" + jsonEscape(g_helmet.fall) + "\"";
+    body += ",\"pulse\":\"" + jsonEscape(g_helmet.pulse) + "\"";
+    body += ",\"body\":\"" + jsonEscape(g_helmet.body) + "\"";
+    body += ",\"amb\":\"" + jsonEscape(g_helmet.amb) + "\"";
+    body += ",\"rh\":\"" + jsonEscape(g_helmet.rh) + "\"";
+    body += ",\"voc\":\"" + jsonEscape(g_helmet.voc) + "\"";
+    body += ",\"co\":\"" + jsonEscape(g_helmet.co) + "\"";
+    body += ",\"nh3\":\"" + jsonEscape(g_helmet.nh3) + "\"";
+    body += ",\"no2\":\"" + jsonEscape(g_helmet.no2) + "\"";
+    body += ",\"age_s\":" + String(g_helmet.updatedMs ? age : 0);
+    body += ",\"has_data\":" + String(g_helmet.updatedMs ? "true" : "false");
+    body += "}";
+    return sendWebResponse(req, "application/json", body.c_str(), body.length(), "helmet");
+}
+
 static esp_err_t webIndexHandler(httpd_req_t* req) {
+    httpd_resp_set_type(req, "text/html");
+    httpd_resp_set_hdr(req, "Cache-Control", "no-store");
+    return httpd_resp_send(req, HELMET_HTML, HTTPD_RESP_USE_STRLEN);
+}
+
+static esp_err_t webLegacyHandler(httpd_req_t* req) {
     httpd_resp_set_type(req, "text/html");
     httpd_resp_set_hdr(req, "Cache-Control", "no-store");
     return httpd_resp_send(req, WEB_INDEX_HTML, HTTPD_RESP_USE_STRLEN);
@@ -2263,7 +2365,7 @@ void startWebServer() {
 
         httpd_config_t config = HTTPD_DEFAULT_CONFIG();
         config.server_port = 80;
-        config.max_uri_handlers = 16;
+        config.max_uri_handlers = 20;
     // LWIP_MAX_SOCKETS=16; httpd uses 3 internal, leaving room for 13 sessions.
     // Keep one slot available so new UI requests can still reach the server.
     config.max_open_sockets = 12;
@@ -2366,7 +2468,21 @@ void startWebServer() {
             .user_ctx = nullptr
         };
 
+        httpd_uri_t uHelmet = {
+            .uri = "/api/helmet",
+            .method = HTTP_GET,
+            .handler = webHelmetApiHandler,
+            .user_ctx = nullptr
+        };
+        httpd_uri_t uLegacy = {
+            .uri = "/legacy",
+            .method = HTTP_GET,
+            .handler = webLegacyHandler,
+            .user_ctx = nullptr
+        };
         httpd_register_uri_handler(g_httpServer, &uIndex);
+        httpd_register_uri_handler(g_httpServer, &uHelmet);
+        httpd_register_uri_handler(g_httpServer, &uLegacy);
         httpd_register_uri_handler(g_httpServer, &uStatus);
         httpd_register_uri_handler(g_httpServer, &uCells);
         httpd_register_uri_handler(g_httpServer, &uLayout);
@@ -3104,6 +3220,7 @@ static bool forceATModeByHardwareReset() {
 // ============================================================================
 void processReceivedWiSUNData(const char* srcAddr, const char* payload) {
     serviceWatchdog();
+    ingestHelmetText(srcAddr, payload);
     if (g_dataLoggingEnabled && !g_menuActive) {
         SerialBT.printf("[RX] <%s> %s\n", srcAddr, payload);
     }
