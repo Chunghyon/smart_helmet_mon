@@ -1,0 +1,45 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "ESP-IDF: Flash (wrapper)",
+      "type": "shell",
+      "command": "${workspaceFolder}/tools/idf-wrapper",
+      "args": ["-p", "${config:idf.port}", "-b", "${config:idf.flashBaudRate}", "flash"],
+      "presentation": {
+        "reveal": "always",
+        "panel": "dedicated",
+        "focus": true,
+        "clear": true
+      },
+      "problemMatcher": []
+    },
+    {
+      "label": "ESP-IDF: Monitor",
+      "type": "shell",
+      "command": "${workspaceFolder}/tools/idf-wrapper",
+      "args": ["monitor", "-p", "${config:idf.port}", "-b", "${config:idf.monitorBaudRate}"],
+      "presentation": {
+        "reveal": "always",
+        "panel": "dedicated",
+        "focus": true,
+        "clear": true
+      },
+      "problemMatcher": []
+    },
+    {
+      "label": "Serial Monitor (miniterm)",
+      "type": "shell",
+      "command": "python3",
+      "args": ["-m", "serial.tools.miniterm", "--raw", "${config:idf.port}", "${config:idf.monitorBaudRate}"],
+      "presentation": {
+        "reveal": "always",
+        "panel": "dedicated",
+        "focus": true,
+        "clear": true
+      },
+      "isBackground": true,
+      "problemMatcher": []
+    }
+  ]
+}

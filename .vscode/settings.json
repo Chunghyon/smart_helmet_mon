@@ -1,0 +1,21 @@
+{
+	"C_Cpp.intelliSenseEngine": "default",
+	"idf.espIdfPathWin": "D:\\esp32\\esp-idfs\\v5.5\\esp-idf",
+	"idf.toolsPathWin": "D:\\esp32\\esp-idfs\\v5.5\\esp-idf-tools",
+	"idf.pythonInstallPath": "D:\\esp32\\esp-idfs\\v5.5\\esp-idf-tools\\tools\\idf-python\\3.11.2\\python.exe",
+	"idf.openOcdConfigs": [
+		"board/esp32s3-builtin.cfg"
+	],
+	"idf.flashType": "UART",
+	"idf.portWin": "COM5",
+	"idf.monitorBaudRate": "115200",
+	"idf.flashBaudRate": "921600",
+	"idf.customExtraVars": {
+		"OPENOCD_SCRIPTS": "D:\\esp32\\esp-idfs\\v5.4\\esp-idf-tools\\tools\\openocd-esp32\\v0.12.0-esp32-20250707\\openocd-esp32\\share\\openocd\\scripts",
+		"IDF_CCACHE_ENABLE": "1",
+		"ESP_ROM_ELF_DIR": "D:\\esp32\\esp-idfs\\v5.4\\esp-idf-tools\\tools\\esp-rom-elfs\\20241011",
+		"IDF_TARGET": "esp32s3"
+	},
+	"editor.tabSize": 4,
+	"editor.insertSpaces": false
+}

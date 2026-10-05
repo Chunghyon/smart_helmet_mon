@@ -1,0 +1,13 @@
+{
+  "idf.espIdfPath": "/Users/youngjunahn/esp/esp-idf",
+  "idf.toolsPath": "/Users/youngjunahn/.espressif",
+  "idf.port": "/dev/cu.wchusbserial14330",
+  "idf.adapterTargetName": "esp32",
+  "idf.customExtraPaths": "${workspaceFolder}/tools",
+  "idf.flashBaudRate": "460800",
+  "idf.monitorBaudRate": "115200",
+  "idf.flashType": "UART",
+  "C_Cpp.default.configurationProvider": "espressif.esp-idf-extension",
+  "C_Cpp.default.compileCommandsFile": "${workspaceFolder}/build/compile_commands.json",
+  "idf.currentSetup": "/Users/youngjunahn/esp/esp-idf"
+}
