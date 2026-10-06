@@ -456,6 +456,7 @@ static const char* WEB_INDEX_HTML = R"HTML(
             <button id="btnPacketToggle">Hide Window</button>
             <button id="btnCheckInterval">Check Interval</button>
             <button id="btnFireClear">Warning Clear</button>
+            <button id="btnDataReset">초기화</button>
         </div>
         <div id="otaModal" class="otaModalOverlay" aria-hidden="true">
             <div class="otaModal" role="dialog" aria-modal="true" aria-label="Firmware Update Progress">
@@ -911,6 +912,20 @@ static const char* WEB_INDEX_HTML = R"HTML(
                 clearAllWarningPopups();
                 addLog('[WEB] Warning clear sent');
             }).catch(() => addLog('[WEB] Warning clear failed'));
+        };
+        const btnDataReset = document.getElementById('btnDataReset');
+        btnDataReset.onclick = () => {
+            fetch('/api/data_reset').then(r => r.json()).then(() => {
+                clearAllWarningPopups();
+                logEl.textContent = '';
+                cellMap.forEach((cell) => {
+                    const code = cell.querySelector('.code');
+                    if (code) code.textContent = '';
+                    cell.className = 'cell';
+                });
+                nodesEl.textContent = 'Nodes: 0';
+                addLog('[WEB] data reset, collecting from scratch');
+            }).catch(() => addLog('[WEB] data reset failed'));
         };
 
         btnPacketToggle.onclick = () => setPacketWindowVisible(!packetPaneVisible);
@@ -1565,6 +1580,17 @@ static esp_err_t webOtaUpdateHandler(httpd_req_t* req) {
 static esp_err_t webFireClearHandler(httpd_req_t* req) {
     clearAllWarnings();
     return sendOkJson(req, true, "warning cleared");
+}
+
+static esp_err_t handleDataReset(httpd_req_t *req) {
+    g_cellStateCount = 0;
+    g_nodeCount = 0;
+    g_keyIpCount = 0;
+    g_keyIpDirty = true;
+    clearAllWarnings();
+    notifyWebClients("", "", "data_reset", "", "", "");
+    Serial.println("[WEB] data reset");
+    return sendOkJson(req, true, "data reset");
 }
 
 static esp_err_t webCheckIntervalHandler(httpd_req_t* req) {
@@ -2431,6 +2457,12 @@ void startWebServer() {
             .handler = webFireClearHandler,
             .user_ctx = nullptr
         };
+        httpd_uri_t uDataReset = {
+            .uri = "/api/data_reset",
+            .method = HTTP_GET,
+            .handler = handleDataReset,
+            .user_ctx = nullptr
+        };
         httpd_uri_t uCheckInterval = {
             .uri = "/api/check_interval",
             .method = HTTP_GET,
@@ -2488,6 +2520,7 @@ void startWebServer() {
         httpd_register_uri_handler(g_httpServer, &uLayout);
         httpd_register_uri_handler(g_httpServer, &uWs);
         httpd_register_uri_handler(g_httpServer, &uFireClear);
+        httpd_register_uri_handler(g_httpServer, &uDataReset);
         httpd_register_uri_handler(g_httpServer, &uCheckInterval);
         httpd_register_uri_handler(g_httpServer, &uStatusCheck);
         httpd_register_uri_handler(g_httpServer, &uNetworkCheck);
