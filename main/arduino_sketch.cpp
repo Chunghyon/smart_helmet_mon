@@ -2447,7 +2447,7 @@ static void ingestHelmetText(const char* src, const char* payload) {
 static const char HELMET_HTML[] =
     "<!DOCTYPE html><html><head><meta charset='utf-8'>"
     "<meta name='viewport' content='width=device-width,initial-scale=1'>"
-    "<title>Smart Helmet</title><style>"
+    "<title>Smart Safety Monitor by JJSYSTEM</title><style>"
     "body{font-family:sans-serif;background:#101418;color:#e8eef2;margin:0}"
     "header{padding:16px 20px;background:#182028}"
     "h1{margin:0;font-size:22px}"
@@ -2467,7 +2467,7 @@ static const char HELMET_HTML[] =
     ".limits .row{display:flex;flex-wrap:wrap;gap:8px;align-items:center}"
     ".limits label{font-size:12px;color:#9ab}"
     ".limits input{min-width:72px;width:84px}"
-    "</style></head><body><header><h1>Smart Helmet</h1>"
+    "</style></head><body><header><h1>Smart Safety Monitor by JJSYSTEM</h1>"
     "<div class='row'><select id='sel'></select>"
     "<input id='alias' placeholder='작업자'>"
     "<input id='phone' placeholder='휴대폰'>"
@@ -2478,7 +2478,7 @@ static const char HELMET_HTML[] =
     "<div class='grid' id='grid'></div>"
     "<section class='limits'><h2>정상 범위</h2><div class='row'>"
     "<label>체온<input id='bodyMin' type='number' step='0.1'>~<input id='bodyMax' type='number' step='0.1'></label>"
-    "<label>기온<input id='ambMin' type='number' step='0.1'>~<input id='ambMax' type='number' step='0.1'></label>"
+    "<label>주변온도<input id='ambMin' type='number' step='0.1'>~<input id='ambMax' type='number' step='0.1'></label>"
     "<label>습도<input id='rhMin' type='number' step='0.1'>~<input id='rhMax' type='number' step='0.1'></label>"
     "<label>VOC최대<input id='vocMax' type='number' step='0.1'></label>"
     "<label>CO최대<input id='coMax' type='number' step='0.1'></label>"
@@ -2486,7 +2486,7 @@ static const char HELMET_HTML[] =
     "<label>NO2최대<input id='no2Max' type='number' step='0.01'></label>"
     "<button id='saveLim' type='button'>범위저장</button></div></section>"
     "<script>"
-    "const keys=['motion','fall','pulse','body','amb','rh','voc','co','nh3','no2'];""const names={motion:'움직임',fall:'낙상',pulse:'맥박',body:'체온',amb:'기온',rh:'습도',voc:'VOC',co:'일산화탄소',nh3:'암모니아',no2:'이산화질소'};"
+    "const keys=['fall','motion','pulse','body','amb','rh','voc','co','nh3','no2'];""const names={motion:'활동감지',fall:'낙상의심',pulse:'생체미세움직임',body:'체온',amb:'주변온도',rh:'습도',voc:'VOC',co:'일산화탄소(CO)',nh3:'암모니아(NH3)',no2:'이산화질소(NO2)'};"
     "let selected='';"
     "function cls(k,v){if(k=='motion'&&v=='still')return 'bad';if(k=='fall'&&v=='yes')return 'bad';if(k=='pulse'&&(v=='rising'||v=='falling'))return 'warn';var n=parseFloat(v);var L=window._lim||{};if(isNaN(n))return 'ok';if(k=='body'&&(n<L.body_min||n>L.body_max))return 'bad';if(k=='amb'&&(n<L.amb_min||n>L.amb_max))return 'bad';if(k=='rh'&&(n<L.rh_min||n>L.rh_max))return 'bad';if(k=='voc'&&n>L.voc_max)return 'bad';if(k=='co'&&n>L.co_max)return 'bad';if(k=='nh3'&&n>L.nh3_max)return 'bad';if(k=='no2'&&n>L.no2_max)return 'bad';return 'ok';}"
     "function loadLim(){fetch('/api/limits').then(r=>r.json()).then(j=>{window._lim=j;bodyMin.value=j.body_min;bodyMax.value=j.body_max;ambMin.value=j.amb_min;ambMax.value=j.amb_max;rhMin.value=j.rh_min;rhMax.value=j.rh_max;vocMax.value=j.voc_max;coMax.value=j.co_max;nh3Max.value=j.nh3_max;no2Max.value=j.no2_max;}).catch(()=>{});}"
@@ -3454,7 +3454,7 @@ void updateOledStatus() {
     memset(oledBuffer, 0, sizeof(oledBuffer));
     // "SH Server" at 150%, "v1.0" smaller (100%) and baseline-aligned with it
     // (150%-scale glyphs are 10px tall vs 7px at 100%, hence the +3 y offset).
-    int titleEndX = oledDrawStringScaled(0, 0, "SH Server ", 3, 2);
+    int titleEndX = oledDrawStringScaled(0, 0, "SSM Server ", 3, 2);
     oledDrawStringScaled(titleEndX, 3, "v1.0", 1, 1);
     oledDrawString(0, 2, line2);
     oledDrawString(0, 4, line3);
