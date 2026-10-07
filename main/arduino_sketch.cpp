@@ -1623,6 +1623,7 @@ static esp_err_t handleDataReset(httpd_req_t *req) {
     char src[48] = "";
     if (httpd_req_get_url_query_str(req, q, sizeof(q)) == ESP_OK) {
         httpd_query_key_value(q, "src", src, sizeof(src));
+        urlDecode(src);
     }
     if (!src[0]) strncpy(src, g_lastHelmetDst, sizeof(src) - 1);
     bool sent = sendRestartSensor(src);
@@ -2403,7 +2404,8 @@ static const char HELMET_HTML[] =
     "select,input{background:#101820;color:#e8eef2;border:1px solid #345;border-radius:8px;padding:8px;min-width:180px}"
     "button{border-radius:8px;padding:8px 14px;font-weight:700;cursor:pointer}"
     "#btnDataReset{background:#166534;color:#fff;border:1px solid #86efac}"
-    "#del{background:#7f1d1d;color:#fff;border:1px solid #fca5a5}"
+    "#save{background:#1d4ed8;color:#fff;border:1px solid #93c5fd}"
+"#del{background:#7f1d1d;color:#fff;border:1px solid #fca5a5}"
     ".meta{color:#9ab;font-size:13px;margin-top:8px}"
     ".grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:12px;padding:16px}"
     ".card{background:#1c2630;border-radius:10px;padding:14px}"
@@ -2413,6 +2415,7 @@ static const char HELMET_HTML[] =
     "<div class='row'><select id='sel'></select>"
     "<input id='alias' placeholder='별명'>"
     "<input id='phone' placeholder='전화번호'>"
+    "<button id='save' type='button'>저장</button>"
     "<button id='del' type='button'>삭제</button>"
     "<button id='btnDataReset' type='button'>초기화</button></div>"
     "<div class='meta' id='meta'>waiting</div></header><div class='grid' id='grid'></div>"
@@ -2420,19 +2423,19 @@ static const char HELMET_HTML[] =
     "const keys=['motion','fall','pulse','body','amb','rh','voc','co','nh3','no2'];"
     "let selected='';"
     "function cls(k,v){if(k=='fall'&&v=='yes')return 'bad';if(k=='pulse'&&(v=='rising'||v=='falling'))return 'warn';return 'ok';}"
-    "function paint(d){document.getElementById('meta').textContent=(d.src||'-')+'  '+(d.age_s==null?'':d.age_s+'s ago');"
+    "function paint(d){var src=d.src||'-';document.getElementById('meta').textContent=src+(d.has_data?('  '+d.age_s+'s ago'):'');"
     "document.getElementById('grid').innerHTML=keys.map(k=>'<div class=\"card\"><div class=\"k\">'+k+'</div><div class=\"v '+cls(k,d[k]||'')+'\">'+(d[k]||'-')+'</div></div>').join('');}"
     "function loadOne(){if(!selected){paint({});return;}fetch('/api/helmet?src='+encodeURIComponent(selected)).then(r=>r.json()).then(paint).catch(()=>{});}"
+    "function fillMeta(){const cur=(window._items||[]).find(it=>it.ipv6==selected)||{};document.getElementById('alias').value=cur.alias||'';document.getElementById('phone').value=cur.phone||'';}"
     "function loadList(){fetch('/api/helmets').then(r=>r.json()).then(j=>{"
-    "const sel=document.getElementById('sel');const prev=selected||sel.value;"
-    "sel.innerHTML='';(j.items||[]).forEach(it=>{const o=document.createElement('option');o.value=it.ipv6;o.textContent=it.ipv6;sel.appendChild(o);});"
+    "window._items=j.items||[];const sel=document.getElementById('sel');const prev=selected||sel.value;"
+    "sel.innerHTML='';window._items.forEach(it=>{const o=document.createElement('option');o.value=it.ipv6;o.textContent=it.ipv6;sel.appendChild(o);});"
     "if(prev && Array.from(sel.options).some(o=>o.value==prev)) sel.value=prev; else if(sel.options.length) sel.value=sel.options[0].value;"
-    "selected=sel.value;const cur=(j.items||[]).find(it=>it.ipv6==selected)||{};"
-    "document.getElementById('alias').value=cur.alias||'';document.getElementById('phone').value=cur.phone||'';loadOne();"
+    "const changed=selected!==sel.value;selected=sel.value;if(changed)fillMeta();loadOne();"
     "}).catch(()=>{});}"
-    "document.getElementById('sel').onchange=function(){selected=this.value;loadList();};"
-    "function saveMeta(){if(!selected)return;fetch('/api/helmet_meta?src='+encodeURIComponent(selected)+'&alias='+encodeURIComponent(document.getElementById('alias').value)+'&phone='+encodeURIComponent(document.getElementById('phone').value));}"
-    "document.getElementById('alias').onchange=saveMeta;document.getElementById('phone').onchange=saveMeta;"
+    "document.getElementById('sel').onchange=function(){selected=this.value;fillMeta();loadOne();};"
+    "function saveMeta(){if(!selected)return;fetch('/api/helmet_meta?src='+encodeURIComponent(selected)+'&alias='+encodeURIComponent(document.getElementById('alias').value)+'&phone='+encodeURIComponent(document.getElementById('phone').value)).then(r=>r.json()).then(j=>{document.getElementById('meta').textContent=(j&&j.msg)?j.msg:'saved';});}"
+    "document.getElementById('save').onclick=saveMeta;"
     "document.getElementById('del').onclick=function(){if(!selected)return;fetch('/api/helmet_delete?src='+encodeURIComponent(selected)).then(()=>{selected='';loadList();});};"
     "document.getElementById('btnDataReset').onclick=function(){if(!selected){document.getElementById('meta').textContent='no selected helmet';return;}"
     "fetch('/api/data_reset?src='+encodeURIComponent(selected)).then(r=>r.json()).then(j=>{document.getElementById('meta').textContent=(j&&j.msg)?j.msg:'no reply';}).catch(()=>{document.getElementById('meta').textContent='reset failed';});};"
@@ -2444,6 +2447,31 @@ static HelmetLive* helmetLiveBySrc(const char* src) {
         if (strcmp(g_helmetLive[i].ipv6, src) == 0) return &g_helmetLive[i];
     }
     return nullptr;
+}
+
+
+static int hexVal(char c) {
+    if (c >= '0' && c <= '9') return c - '0';
+    if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+    if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+    return -1;
+}
+
+static void urlDecode(char* s) {
+    if (!s) return;
+    char* w = s;
+    for (char* r = s; *r; ) {
+        if (*r == '%' && hexVal(r[1]) >= 0 && hexVal(r[2]) >= 0) {
+            *w++ = (char)((hexVal(r[1]) << 4) | hexVal(r[2]));
+            r += 3;
+        } else if (*r == '+') {
+            *w++ = ' ';
+            r++;
+        } else {
+            *w++ = *r++;
+        }
+    }
+    *w = '\0';
 }
 
 static esp_err_t webHelmetsHandler(httpd_req_t* req) {
@@ -2473,6 +2501,9 @@ static esp_err_t webHelmetMetaHandler(httpd_req_t* req) {
         httpd_query_key_value(q, "src", src, sizeof(src));
         httpd_query_key_value(q, "alias", alias, sizeof(alias));
         httpd_query_key_value(q, "phone", phone, sizeof(phone));
+        urlDecode(src);
+        urlDecode(alias);
+        urlDecode(phone);
     }
     int i = helmetDirFind(src);
     if (i < 0) return sendOkJson(req, false, "unknown helmet");
@@ -2491,6 +2522,7 @@ static esp_err_t webHelmetDeleteHandler(httpd_req_t* req) {
     char src[48] = "";
     if (httpd_req_get_url_query_str(req, q, sizeof(q)) == ESP_OK) {
         httpd_query_key_value(q, "src", src, sizeof(src));
+        urlDecode(src);
     }
     int i = helmetDirFind(src);
     if (i < 0) return sendOkJson(req, false, "unknown helmet");
@@ -2516,6 +2548,7 @@ static esp_err_t webHelmetApiHandler(httpd_req_t* req) {
     char src[48] = "";
     if (httpd_req_get_url_query_str(req, q, sizeof(q)) == ESP_OK) {
         httpd_query_key_value(q, "src", src, sizeof(src));
+        urlDecode(src);
     }
     if (!src[0]) strncpy(src, g_selectedHelmet, sizeof(src) - 1);
     if (src[0]) strncpy(g_selectedHelmet, src, sizeof(g_selectedHelmet) - 1);
