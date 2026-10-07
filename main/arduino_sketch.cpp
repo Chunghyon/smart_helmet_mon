@@ -2293,6 +2293,8 @@ static int helmetDirNote(const char* ip) {
         if (!helmetDirFileLookup(ip, g_helmetDir[i].alias, sizeof(g_helmetDir[i].alias), g_helmetDir[i].phone, sizeof(g_helmetDir[i].phone))) {
             helmetDirFileUpsert(ip, "", "");
         }
+    } else if (!g_helmetDir[i].alias[0] && !g_helmetDir[i].phone[0]) {
+        helmetDirFileLookup(ip, g_helmetDir[i].alias, sizeof(g_helmetDir[i].alias), g_helmetDir[i].phone, sizeof(g_helmetDir[i].phone));
     }
     g_helmetDir[i].lastSeenMs = millis();
     if (!g_selectedHelmet[0]) strncpy(g_selectedHelmet, ip, sizeof(g_selectedHelmet) - 1);
@@ -2424,15 +2426,17 @@ static const char HELMET_HTML[] =
     "const keys=['motion','fall','pulse','body','amb','rh','voc','co','nh3','no2'];"
     "let selected='';"
     "function cls(k,v){if(k=='fall'&&v=='yes')return 'bad';if(k=='pulse'&&(v=='rising'||v=='falling'))return 'warn';return 'ok';}"
-    "function paint(d){var src=d.src||'-';document.getElementById('meta').textContent=src+(d.has_data?('  '+d.age_s+'s ago'):'');"
+    "function paint(d){var cur=(window._items||[]).find(it=>it.ipv6==(d.src||selected))||{};var who=(cur.alias||'')+(cur.phone?(' '+cur.phone):'');document.getElementById('meta').textContent=(who?who+' / ':'')+(d.src||'-')+(d.has_data?('  '+d.age_s+'s ago'):'');"
     "document.getElementById('grid').innerHTML=keys.map(k=>'<div class=\"card\"><div class=\"k\">'+k+'</div><div class=\"v '+cls(k,d[k]||'')+'\">'+(d[k]||'-')+'</div></div>').join('');}"
     "function loadOne(){var u=selected?('/api/helmet?src='+encodeURIComponent(selected)):'/api/helmet';fetch(u).then(r=>r.json()).then(paint).catch(()=>{});}"
     "function fillMeta(){const cur=(window._items||[]).find(it=>it.ipv6==selected)||{};document.getElementById('alias').value=cur.alias||'';document.getElementById('phone').value=cur.phone||'';}"
     "function loadList(){fetch('/api/helmets').then(r=>r.json()).then(j=>{"
     "window._items=j.items||[];const sel=document.getElementById('sel');const prev=selected||sel.value;"
-    "sel.innerHTML='';window._items.forEach(it=>{const o=document.createElement('option');o.value=it.ipv6;o.textContent=it.ipv6;sel.appendChild(o);});"
+    "sel.innerHTML='';window._items.forEach(it=>{const o=document.createElement('option');o.value=it.ipv6;o.textContent=(it.alias?it.alias+' / ':'')+it.ipv6;sel.appendChild(o);});"
     "if(prev && Array.from(sel.options).some(o=>o.value==prev)) sel.value=prev; else if(sel.options.length) sel.value=sel.options[0].value;"
-    "const changed=selected!==sel.value;selected=sel.value;if(changed)fillMeta();loadOne();"
+    "const changed=selected!==sel.value;selected=sel.value;"
+    "const typing=document.activeElement&&(document.activeElement.id=='alias'||document.activeElement.id=='phone');"
+    "if(changed||!typing)fillMeta();loadOne();"
     "}).catch(()=>{});}"
     "document.getElementById('sel').onchange=function(){selected=this.value;fillMeta();loadOne();};"
     "function saveMeta(){if(!selected)return;fetch('/api/helmet_meta?src='+encodeURIComponent(selected)+'&alias='+encodeURIComponent(document.getElementById('alias').value)+'&phone='+encodeURIComponent(document.getElementById('phone').value)).then(r=>r.json()).then(j=>{document.getElementById('meta').textContent=(j&&j.msg)?j.msg:'saved';});}"
@@ -2481,23 +2485,8 @@ static bool helmetListHas(const String& body, const char* ip) {
 }
 
 static esp_err_t webHelmetsHandler(httpd_req_t* req) {
-    String body = "{\"max\":1024,\"count\":" + String(g_helmetDirCount) + ",\"items\":[";
+    String body = "{\"max\":1024,\"count\":" + String(g_helmetDirStored) + ",\"items\":[";
     bool first = true;
-    if (g_helmetDir) {
-        for (int i = 0; i < g_helmetDirCount; i++) {
-            if (!g_helmetDir[i].ipv6[0]) continue;
-            if (!first) body += ",";
-            first = false;
-            body += "{\"ipv6\":\"" + jsonEscape(g_helmetDir[i].ipv6) + "\"";
-            body += ",\"alias\":\"" + jsonEscape(g_helmetDir[i].alias) + "\"";
-            body += ",\"phone\":\"" + jsonEscape(g_helmetDir[i].phone) + "\"}";
-        }
-    }
-    if (g_helmet.src[0] && !helmetListHas(body, g_helmet.src)) {
-        if (!first) body += ",";
-        first = false;
-        body += "{\"ipv6\":\"" + jsonEscape(g_helmet.src) + "\",\"alias\":\"\",\"phone\":\"\"}";
-    }
     if (ensureSpiffsMounted()) {
         File f = SPIFFS.open("/helmet_dir.csv", "r");
         if (f) {
@@ -2507,7 +2496,6 @@ static esp_err_t webHelmetsHandler(httpd_req_t* req) {
                 int c1 = line.indexOf(',');
                 if (c1 < 1) continue;
                 String ip = line.substring(0, c1);
-                if (helmetListHas(body, ip.c_str())) continue;
                 int c2 = line.indexOf(',', c1 + 1);
                 String alias = (c2 > c1) ? line.substring(c1 + 1, c2) : line.substring(c1 + 1);
                 String phone = (c2 > c1) ? line.substring(c2 + 1) : "";
@@ -2519,6 +2507,20 @@ static esp_err_t webHelmetsHandler(httpd_req_t* req) {
             }
             f.close();
         }
+    }
+    if (g_helmetDir) {
+        for (int i = 0; i < g_helmetDirCount; i++) {
+            if (!g_helmetDir[i].ipv6[0] || helmetListHas(body, g_helmetDir[i].ipv6)) continue;
+            if (!first) body += ",";
+            first = false;
+            body += "{\"ipv6\":\"" + jsonEscape(g_helmetDir[i].ipv6) + "\"";
+            body += ",\"alias\":\"" + jsonEscape(g_helmetDir[i].alias) + "\"";
+            body += ",\"phone\":\"" + jsonEscape(g_helmetDir[i].phone) + "\"}";
+        }
+    }
+    if (g_helmet.src[0] && !helmetListHas(body, g_helmet.src)) {
+        if (!first) body += ",";
+        body += "{\"ipv6\":\"" + jsonEscape(g_helmet.src) + "\",\"alias\":\"\",\"phone\":\"\"}";
     }
     body += "]}";
     return sendWebResponse(req, "application/json", body.c_str(), body.length(), "helmets");
@@ -2538,6 +2540,8 @@ static esp_err_t webHelmetMetaHandler(httpd_req_t* req) {
         urlDecode(phone);
     }
     int i = helmetDirFind(src);
+    if (i < 0) helmetDirNote(src);
+    i = helmetDirFind(src);
     if (i < 0) return sendOkJson(req, false, "unknown helmet");
     strncpy(g_helmetDir[i].alias, alias, sizeof(g_helmetDir[i].alias) - 1);
     g_helmetDir[i].alias[sizeof(g_helmetDir[i].alias) - 1] = '\0';
@@ -2557,6 +2561,8 @@ static esp_err_t webHelmetDeleteHandler(httpd_req_t* req) {
         urlDecode(src);
     }
     int i = helmetDirFind(src);
+    if (i < 0) helmetDirNote(src);
+    i = helmetDirFind(src);
     if (i < 0) return sendOkJson(req, false, "unknown helmet");
     helmetDirFileDelete(src);
     for (int j = i; j + 1 < g_helmetDirCount; j++) g_helmetDir[j] = g_helmetDir[j + 1];
