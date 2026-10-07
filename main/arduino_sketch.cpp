@@ -2292,9 +2292,17 @@ static int helmetDirNote(const char* ip) {
         strncpy(g_helmetDir[i].ipv6, ip, sizeof(g_helmetDir[i].ipv6) - 1);
         if (!helmetDirFileLookup(ip, g_helmetDir[i].alias, sizeof(g_helmetDir[i].alias), g_helmetDir[i].phone, sizeof(g_helmetDir[i].phone))) {
             helmetDirFileUpsert(ip, "", "");
+            Serial.printf("[HELMET] new src=%s alias empty\n", ip);
+        } else {
+            Serial.printf("[HELMET] loaded src=%s alias=%s phone=%s\n", ip, g_helmetDir[i].alias, g_helmetDir[i].phone);
         }
-    } else if (!g_helmetDir[i].alias[0] && !g_helmetDir[i].phone[0]) {
-        helmetDirFileLookup(ip, g_helmetDir[i].alias, sizeof(g_helmetDir[i].alias), g_helmetDir[i].phone, sizeof(g_helmetDir[i].phone));
+    } else {
+        char alias[24] = "";
+        char phone[16] = "";
+        if (helmetDirFileLookup(ip, alias, sizeof(alias), phone, sizeof(phone))) {
+            if (alias[0]) strncpy(g_helmetDir[i].alias, alias, sizeof(g_helmetDir[i].alias) - 1);
+            if (phone[0]) strncpy(g_helmetDir[i].phone, phone, sizeof(g_helmetDir[i].phone) - 1);
+        }
     }
     g_helmetDir[i].lastSeenMs = millis();
     if (!g_selectedHelmet[0]) strncpy(g_selectedHelmet, ip, sizeof(g_selectedHelmet) - 1);
@@ -3231,11 +3239,13 @@ static bool oledDisplay() {
 // distinct from g_keyIpCount, which also includes entries bulk-loaded from
 // the persisted/default IP-mapping table at boot and were never really seen.
 static int countLiveWisunNodes() {
-    const unsigned long LIVE_WINDOW_MS = 5UL * 60UL * 1000UL; // 5 minutes
+    const unsigned long LIVE_WINDOW_MS = 20000UL;
     unsigned long now = millis();
     int count = 0;
-    for (int i = 0; i < g_keyIpCount; i++) {
-        if (g_keyIps[i].lastSeenMs != 0 && (now - g_keyIps[i].lastSeenMs) <= LIVE_WINDOW_MS) {
+    if (!g_helmetDir) return 0;
+    for (int i = 0; i < g_helmetDirCount; i++) {
+        if (g_helmetDir[i].ipv6[0] && g_helmetDir[i].lastSeenMs &&
+            (now - g_helmetDir[i].lastSeenMs) <= LIVE_WINDOW_MS) {
             count++;
         }
     }
@@ -3284,9 +3294,9 @@ void updateOledStatus() {
     }
 
     memset(oledBuffer, 0, sizeof(oledBuffer));
-    // "LMP Server" at 150%, "v1.0" smaller (100%) and baseline-aligned with it
+    // "SH Server" at 150%, "v1.0" smaller (100%) and baseline-aligned with it
     // (150%-scale glyphs are 10px tall vs 7px at 100%, hence the +3 y offset).
-    int titleEndX = oledDrawStringScaled(0, 0, "LMP Server ", 3, 2);
+    int titleEndX = oledDrawStringScaled(0, 0, "SH Server ", 3, 2);
     oledDrawStringScaled(titleEndX, 3, "v1.0", 1, 1);
     oledDrawString(0, 2, line2);
     oledDrawString(0, 4, line3);
