@@ -1624,6 +1624,8 @@ static bool sendRestartSensor(const char* only) {
 
 static void urlDecode(char* s);
 
+static void helmetDisplayClear(const char* src);
+
 static esp_err_t handleDataReset(httpd_req_t *req) {
     char q[96] = "";
     char src[48] = "";
@@ -1633,7 +1635,8 @@ static esp_err_t handleDataReset(httpd_req_t *req) {
     }
     if (!src[0]) strncpy(src, g_lastHelmetDst, sizeof(src) - 1);
     bool sent = sendRestartSensor(src);
-    Serial.printf("[WEB] data reset src=%s\n", src);
+    helmetDisplayClear(src);
+    Serial.printf("[WEB] data reset src=%s display cleared\n", src);
     return sendOkJson(req, sent, g_restartReply[0] ? g_restartReply : "no reply");
 }
 
@@ -2184,27 +2187,6 @@ static bool helmetDirFileLookup(const char* ip, char* alias, size_t aliasN, char
     return found;
 }
 
-static void helmetDirDumpRed(const char* tag) {
-    Serial.print("\033[31m");
-    Serial.printf("[HELMET] %s saved list\n", tag ? tag : "dir");
-    int shown = 0;
-    if (ensureSpiffsMounted()) {
-        File f = SPIFFS.open("/helmet_dir.csv", "r");
-        if (f) {
-            while (f.available()) {
-                String line = f.readStringUntil('\n');
-                line.trim();
-                if (!line.length()) continue;
-                Serial.printf("[HELMET] file %s\n", line.c_str());
-                shown++;
-            }
-            f.close();
-        }
-    }
-    if (!shown) Serial.println("[HELMET] saved list empty");
-    Serial.print("\033[0m");
-}
-
 static bool helmetUsingFile(void) {
     return ensureSpiffsMounted();
 }
@@ -2320,7 +2302,6 @@ static void helmetDirLoad(void) {
         line.trim();
         if (!line.length()) continue;
         g_helmetDirStored++;
-        Serial.printf("[HELMET] boot %s\n", line.c_str());
     }
     f.close();
     Serial.printf("[HELMET] stored %d\n", g_helmetDirStored);
@@ -2383,6 +2364,20 @@ struct HelmetReport {
     unsigned long updatedMs;
 };
 static HelmetReport g_helmet = {};
+
+static void helmetDisplayClear(const char* src) {
+    if (g_helmetLive) {
+        for (int i = 0; i < g_helmetLiveCount; i++) {
+            if (!src || !src[0] || strcmp(g_helmetLive[i].ipv6, src) == 0) {
+                memset(&g_helmetLive[i], 0, sizeof(g_helmetLive[i]));
+            }
+        }
+    }
+    g_helmet.motion[0] = g_helmet.fall[0] = g_helmet.pulse[0] = 0;
+    g_helmet.body[0] = g_helmet.amb[0] = g_helmet.rh[0] = g_helmet.voc[0] = 0;
+    g_helmet.co[0] = g_helmet.nh3[0] = g_helmet.no2[0] = 0;
+}
+
 
 static void helmetTake(const char* text, const char* key, char* dst, size_t n) {
     const char* p = strstr(text, key);
@@ -2514,7 +2509,7 @@ static const char HELMET_HTML[] =
     "document.getElementById('save').onclick=saveMeta;"
     "document.getElementById('del').onclick=function(){if(!selected)return;fetch('/api/helmet_delete?src='+encodeURIComponent(selected)).then(()=>{selected='';loadList();});};"
     "document.getElementById('btnDataReset').onclick=function(){if(!selected){document.getElementById('meta').textContent='no selected helmet';return;}"
-    "fetch('/api/data_reset?src='+encodeURIComponent(selected)).then(r=>r.json()).then(j=>{document.getElementById('meta').textContent=(j&&j.msg)?j.msg:'no reply';}).catch(()=>{document.getElementById('meta').textContent='reset failed';});};"
+    "paint({});fetch('/api/data_reset?src='+encodeURIComponent(selected)).then(r=>r.json()).then(j=>{document.getElementById('meta').textContent=(j&&j.msg)?j.msg:'no reply';}).catch(()=>{document.getElementById('meta').textContent='reset failed';});};"
     "document.getElementById('saveLim').onclick=saveLim;loadLim();loadList();setInterval(loadList,2000);</script></body></html>";
 
 
@@ -5184,7 +5179,6 @@ void setup() {
     initializeWiSUN();
     if (isWiSUNConnected) {
         Serial.println("[AUTO] Wi-SUN joined (net state 5) - LED green.");
-        helmetDirDumpRed("after join");
     } else {
         Serial.println("[AUTO] Wi-SUN not joined. Use menu 'i' to retry init.");
     }
