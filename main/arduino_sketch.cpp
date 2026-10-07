@@ -2290,8 +2290,7 @@ static int helmetDirNote(const char* ip) {
         i = g_helmetDirCount++;
         memset(&g_helmetDir[i], 0, sizeof(g_helmetDir[i]));
         strncpy(g_helmetDir[i].ipv6, ip, sizeof(g_helmetDir[i].ipv6) - 1);
-        helmetDirFileLookup(ip, g_helmetDir[i].alias, sizeof(g_helmetDir[i].alias), g_helmetDir[i].phone, sizeof(g_helmetDir[i].phone));
-        if (!g_helmetDir[i].alias[0] && g_helmetDirStored < HELMET_DIR_MAX) {
+        if (!helmetDirFileLookup(ip, g_helmetDir[i].alias, sizeof(g_helmetDir[i].alias), g_helmetDir[i].phone, sizeof(g_helmetDir[i].phone))) {
             helmetDirFileUpsert(ip, "", "");
         }
     }
@@ -2478,18 +2477,29 @@ static void urlDecode(char* s) {
 
 static esp_err_t webHelmetsHandler(httpd_req_t* req) {
     helmetDirSave();
-    String body = "{\"max\":1024,\"count\":" + String(g_helmetDirCount) + ",\"items\":[";
-    unsigned long now = millis();
+    String body = "{\"max\":1024,\"count\":" + String(g_helmetDirStored) + ",\"items\":[";
     bool first = true;
-    if (g_helmetDir) for (int i = 0; i < g_helmetDirCount; i++) {
-            if (!g_helmetDir[i].lastSeenMs) continue;
-            if (now - g_helmetDir[i].lastSeenMs > HELMET_CONNECTED_MS) continue;
-            if (!first) body += ",";
-            first = false;
-            body += "{\"ipv6\":\"" + jsonEscape(g_helmetDir[i].ipv6) + "\"";
-            body += ",\"alias\":\"" + jsonEscape(g_helmetDir[i].alias) + "\"";
-            body += ",\"phone\":\"" + jsonEscape(g_helmetDir[i].phone) + "\"}";
+    if (ensureSpiffsMounted()) {
+        File f = SPIFFS.open("/helmet_dir.csv", "r");
+        if (f) {
+            while (f.available()) {
+                String line = f.readStringUntil('\n');
+                line.trim();
+                int c1 = line.indexOf(',');
+                if (c1 < 1) continue;
+                String ip = line.substring(0, c1);
+                int c2 = line.indexOf(',', c1 + 1);
+                String alias = (c2 > c1) ? line.substring(c1 + 1, c2) : line.substring(c1 + 1);
+                String phone = (c2 > c1) ? line.substring(c2 + 1) : "";
+                if (!first) body += ",";
+                first = false;
+                body += "{\"ipv6\":\"" + jsonEscape(ip.c_str()) + "\"";
+                body += ",\"alias\":\"" + jsonEscape(alias.c_str()) + "\"";
+                body += ",\"phone\":\"" + jsonEscape(phone.c_str()) + "\"}";
+            }
+            f.close();
         }
+    }
     body += "]}";
     return sendWebResponse(req, "application/json", body.c_str(), body.length(), "helmets");
 }
