@@ -2467,6 +2467,9 @@ static const char HELMET_HTML[] =
     ".card{background:#1c2630;border-radius:10px;padding:14px}"
     ".k{color:#8aa;font-size:12px;text-transform:uppercase}.v{font-size:28px;margin-top:6px}"
     ".bad{color:#f66}.warn{color:#fc6}.ok{color:#6d6}"
+    ".limits{display:flex;flex-wrap:wrap;gap:8px;padding:8px 16px;background:#141c22}"
+    ".limits label{font-size:12px;color:#9ab}"
+    ".limits input{min-width:72px;width:84px}"
     "</style></head><body><header><h1>Smart Helmet</h1>"
     "<div class='row'><select id='sel'></select>"
     "<input id='alias' placeholder='작업자'>"
@@ -2474,11 +2477,23 @@ static const char HELMET_HTML[] =
     "<button id='save' type='button'>저장</button>"
     "<button id='del' type='button'>삭제</button>"
     "<button id='btnDataReset' type='button'>초기화</button></div>"
-    "<div class='meta' id='meta'>waiting</div></header><div class='grid' id='grid'></div>"
+    "<div class='meta' id='meta'>waiting</div></header>"
+    "<div class='limits'>"
+    "<label>체온<input id='bodyMin' type='number' step='0.1'>~<input id='bodyMax' type='number' step='0.1'></label>"
+    "<label>기온<input id='ambMin' type='number' step='0.1'>~<input id='ambMax' type='number' step='0.1'></label>"
+    "<label>습도<input id='rhMin' type='number' step='0.1'>~<input id='rhMax' type='number' step='0.1'></label>"
+    "<label>VOC최대<input id='vocMax' type='number' step='0.1'></label>"
+    "<label>CO최대<input id='coMax' type='number' step='0.1'></label>"
+    "<label>NH3최대<input id='nh3Max' type='number' step='0.1'></label>"
+    "<label>NO2최대<input id='no2Max' type='number' step='0.01'></label>"
+    "<button id='saveLim' type='button'>범위저장</button></div>"
+    "<div class='grid' id='grid'></div>"
     "<script>"
     "const keys=['motion','fall','pulse','body','amb','rh','voc','co','nh3','no2'];""const names={motion:'움직임',fall:'낙상',pulse:'맥박',body:'체온',amb:'기온',rh:'습도',voc:'VOC',co:'일산화탄소',nh3:'암모니아',no2:'이산화질소'};"
     "let selected='';"
-    "function cls(k,v){if(k=='fall'&&v=='yes')return 'bad';if(k=='pulse'&&(v=='rising'||v=='falling'))return 'warn';return 'ok';}"
+    "function cls(k,v){if(k=='motion'&&v=='still')return 'bad';if(k=='fall'&&v=='yes')return 'bad';if(k=='pulse'&&(v=='rising'||v=='falling'))return 'warn';var n=parseFloat(v);var L=window._lim||{};if(isNaN(n))return 'ok';if(k=='body'&&(n<L.body_min||n>L.body_max))return 'bad';if(k=='amb'&&(n<L.amb_min||n>L.amb_max))return 'bad';if(k=='rh'&&(n<L.rh_min||n>L.rh_max))return 'bad';if(k=='voc'&&n>L.voc_max)return 'bad';if(k=='co'&&n>L.co_max)return 'bad';if(k=='nh3'&&n>L.nh3_max)return 'bad';if(k=='no2'&&n>L.no2_max)return 'bad';return 'ok';}"
+    "function loadLim(){fetch('/api/limits').then(r=>r.json()).then(j=>{window._lim=j;bodyMin.value=j.body_min;bodyMax.value=j.body_max;ambMin.value=j.amb_min;ambMax.value=j.amb_max;rhMin.value=j.rh_min;rhMax.value=j.rh_max;vocMax.value=j.voc_max;coMax.value=j.co_max;nh3Max.value=j.nh3_max;no2Max.value=j.no2_max;}).catch(()=>{});}"
+    "function saveLim(){var q='body_min='+bodyMin.value+'&body_max='+bodyMax.value+'&amb_min='+ambMin.value+'&amb_max='+ambMax.value+'&rh_min='+rhMin.value+'&rh_max='+rhMax.value+'&voc_max='+vocMax.value+'&co_max='+coMax.value+'&nh3_max='+nh3Max.value+'&no2_max='+no2Max.value;fetch('/api/limits?'+q).then(r=>r.json()).then(j=>{window._lim=j;document.getElementById('meta').textContent=(j&&j.msg)?j.msg:'limits saved';loadOne();});}"
     "function koVal(k,v){if(!v)return '-';var m={motion:{moving:'움직임',still:'정지'},fall:{yes:'예',no:'아니오'},pulse:{unknown:'미정',stable:'안정적',rising:'상승',falling:'하강'}};return (m[k]&&m[k][v])?m[k][v]:v;}"
     "function paint(d){var cur=(window._items||[]).find(it=>it.ipv6==(d.src||selected))||{};var who=(cur.alias||'')+(cur.phone?(' '+cur.phone):'');document.getElementById('meta').textContent=(who?who+' / ':'')+(d.src||'-')+(d.has_data?('  '+d.age_s+'s ago'):'');"
     "document.getElementById('grid').innerHTML=keys.map(k=>'<div class=\"card\"><div class=\"k\">'+(names[k]||k)+'</div><div class=\"v '+cls(k,d[k]||'')+'\">'+koVal(k,d[k])+'</div></div>').join('');}"
@@ -2498,7 +2513,91 @@ static const char HELMET_HTML[] =
     "document.getElementById('del').onclick=function(){if(!selected)return;fetch('/api/helmet_delete?src='+encodeURIComponent(selected)).then(()=>{selected='';loadList();});};"
     "document.getElementById('btnDataReset').onclick=function(){if(!selected){document.getElementById('meta').textContent='no selected helmet';return;}"
     "fetch('/api/data_reset?src='+encodeURIComponent(selected)).then(r=>r.json()).then(j=>{document.getElementById('meta').textContent=(j&&j.msg)?j.msg:'no reply';}).catch(()=>{document.getElementById('meta').textContent='reset failed';});};"
-    "loadList();setInterval(loadList,2000);</script></body></html>";
+    "document.getElementById('saveLim').onclick=saveLim;loadLim();loadList();setInterval(loadList,2000);</script></body></html>";
+
+
+struct HelmetLimits {
+    float bodyMin, bodyMax, ambMin, ambMax, rhMin, rhMax;
+    float vocMax, coMax, nh3Max, no2Max;
+};
+static HelmetLimits g_limits = {35.0f, 37.5f, 18.0f, 30.0f, 30.0f, 70.0f, 25.0f, 9.0f, 25.0f, 0.10f};
+
+static void helmetLimitsLoad(void) {
+    Preferences prefs;
+    if (!prefs.begin("shlim", false)) return;
+    g_limits.bodyMin = prefs.getFloat("bodyMin", g_limits.bodyMin);
+    g_limits.bodyMax = prefs.getFloat("bodyMax", g_limits.bodyMax);
+    g_limits.ambMin = prefs.getFloat("ambMin", g_limits.ambMin);
+    g_limits.ambMax = prefs.getFloat("ambMax", g_limits.ambMax);
+    g_limits.rhMin = prefs.getFloat("rhMin", g_limits.rhMin);
+    g_limits.rhMax = prefs.getFloat("rhMax", g_limits.rhMax);
+    g_limits.vocMax = prefs.getFloat("vocMax", g_limits.vocMax);
+    g_limits.coMax = prefs.getFloat("coMax", g_limits.coMax);
+    g_limits.nh3Max = prefs.getFloat("nh3Max", g_limits.nh3Max);
+    g_limits.no2Max = prefs.getFloat("no2Max", g_limits.no2Max);
+    prefs.end();
+}
+
+static void helmetLimitsSave(void) {
+    Preferences prefs;
+    if (!prefs.begin("shlim", false)) return;
+    prefs.putFloat("bodyMin", g_limits.bodyMin);
+    prefs.putFloat("bodyMax", g_limits.bodyMax);
+    prefs.putFloat("ambMin", g_limits.ambMin);
+    prefs.putFloat("ambMax", g_limits.ambMax);
+    prefs.putFloat("rhMin", g_limits.rhMin);
+    prefs.putFloat("rhMax", g_limits.rhMax);
+    prefs.putFloat("vocMax", g_limits.vocMax);
+    prefs.putFloat("coMax", g_limits.coMax);
+    prefs.putFloat("nh3Max", g_limits.nh3Max);
+    prefs.putFloat("no2Max", g_limits.no2Max);
+    prefs.end();
+    Serial.printf("[HELMET] limits saved body %.1f-%.1f amb %.1f-%.1f rh %.1f-%.1f voc %.1f co %.1f nh3 %.1f no2 %.2f\n",
+                  g_limits.bodyMin, g_limits.bodyMax, g_limits.ambMin, g_limits.ambMax,
+                  g_limits.rhMin, g_limits.rhMax, g_limits.vocMax, g_limits.coMax, g_limits.nh3Max, g_limits.no2Max);
+}
+
+static String helmetLimitsJson(void) {
+    String b = "{";
+    b += "\"body_min\":" + String(g_limits.bodyMin, 1);
+    b += ",\"body_max\":" + String(g_limits.bodyMax, 1);
+    b += ",\"amb_min\":" + String(g_limits.ambMin, 1);
+    b += ",\"amb_max\":" + String(g_limits.ambMax, 1);
+    b += ",\"rh_min\":" + String(g_limits.rhMin, 1);
+    b += ",\"rh_max\":" + String(g_limits.rhMax, 1);
+    b += ",\"voc_max\":" + String(g_limits.vocMax, 1);
+    b += ",\"co_max\":" + String(g_limits.coMax, 1);
+    b += ",\"nh3_max\":" + String(g_limits.nh3Max, 1);
+    b += ",\"no2_max\":" + String(g_limits.no2Max, 2);
+    b += ",\"msg\":\"limits saved\"}";
+    return b;
+}
+
+static float limQuery(httpd_req_t* req, const char* key, float cur) {
+    char q[240] = "";
+    char v[16] = "";
+    if (httpd_req_get_url_query_str(req, q, sizeof(q)) != ESP_OK) return cur;
+    if (httpd_query_key_value(q, key, v, sizeof(v)) != ESP_OK) return cur;
+    return strtof(v, nullptr);
+}
+
+static esp_err_t webLimitsHandler(httpd_req_t* req) {
+    if (httpd_req_get_url_query_len(req) > 0) {
+        g_limits.bodyMin = limQuery(req, "body_min", g_limits.bodyMin);
+        g_limits.bodyMax = limQuery(req, "body_max", g_limits.bodyMax);
+        g_limits.ambMin = limQuery(req, "amb_min", g_limits.ambMin);
+        g_limits.ambMax = limQuery(req, "amb_max", g_limits.ambMax);
+        g_limits.rhMin = limQuery(req, "rh_min", g_limits.rhMin);
+        g_limits.rhMax = limQuery(req, "rh_max", g_limits.rhMax);
+        g_limits.vocMax = limQuery(req, "voc_max", g_limits.vocMax);
+        g_limits.coMax = limQuery(req, "co_max", g_limits.coMax);
+        g_limits.nh3Max = limQuery(req, "nh3_max", g_limits.nh3Max);
+        g_limits.no2Max = limQuery(req, "no2_max", g_limits.no2Max);
+        helmetLimitsSave();
+    }
+    String body = helmetLimitsJson();
+    return sendWebResponse(req, "application/json", body.c_str(), body.length(), "limits");
+}
 
 static HelmetLive* helmetLiveBySrc(const char* src) {
     if (!g_helmetLive || !src || !src[0]) return nullptr;
@@ -3029,6 +3128,12 @@ void startWebServer() {
             .user_ctx = nullptr
         };
 
+        httpd_uri_t uLimits = {
+            .uri = "/api/limits",
+            .method = HTTP_GET,
+            .handler = webLimitsHandler,
+            .user_ctx = nullptr
+        };
         httpd_uri_t uHelmet = {
             .uri = "/api/helmet",
             .method = HTTP_GET,
@@ -3043,6 +3148,7 @@ void startWebServer() {
         };
         httpd_register_uri_handler(g_httpServer, &uIndex);
         httpd_register_uri_handler(g_httpServer, &uHelmet);
+        httpd_register_uri_handler(g_httpServer, &uLimits);
         httpd_register_uri_handler(g_httpServer, &uLegacy);
         httpd_register_uri_handler(g_httpServer, &uStatus);
         httpd_register_uri_handler(g_httpServer, &uCells);
@@ -5037,6 +5143,7 @@ void setup() {
 
     loadConfig();
     loadRuntimeState();
+    helmetLimitsLoad();
     helmetDirLoad();
     updateBluetoothDeviceName();
 
