@@ -2395,9 +2395,9 @@ static esp_err_t webHelmetMetaHandler(httpd_req_t* req) {
     int i = helmetDirFind(src);
     if (i < 0) return sendOkJson(req, false, "unknown helmet");
     strncpy(g_helmetDir[i].alias, alias, sizeof(g_helmetDir[i].alias) - 1);
-    g_helmetDir[i].alias[sizeof(g_helmetDir[i].alias) - 1] = '\\0';
+    g_helmetDir[i].alias[sizeof(g_helmetDir[i].alias) - 1] = '\0';
     strncpy(g_helmetDir[i].phone, phone, sizeof(g_helmetDir[i].phone) - 1);
-    g_helmetDir[i].phone[sizeof(g_helmetDir[i].phone) - 1] = '\\0';
+    g_helmetDir[i].phone[sizeof(g_helmetDir[i].phone) - 1] = '\0';
     g_helmetDirDirty = true;
     helmetDirSave();
     strncpy(g_selectedHelmet, src, sizeof(g_selectedHelmet) - 1);
@@ -2415,9 +2415,14 @@ static esp_err_t webHelmetDeleteHandler(httpd_req_t* req) {
     for (int j = i; j + 1 < g_helmetDirCount; j++) g_helmetDir[j] = g_helmetDir[j + 1];
     g_helmetDirCount--;
     memset(&g_helmetDir[g_helmetDirCount], 0, sizeof(g_helmetDir[0]));
+    for (int j = 0; j < g_helmetLiveCount; j++) {
+        if (strcmp(g_helmetLive[j].ipv6, src) == 0) {
+            memset(&g_helmetLive[j], 0, sizeof(g_helmetLive[j]));
+        }
+    }
     g_helmetDirDirty = true;
     helmetDirSave();
-    if (strcmp(g_selectedHelmet, src) == 0) g_selectedHelmet[0] = '\\0';
+    if (strcmp(g_selectedHelmet, src) == 0) g_selectedHelmet[0] = '\0';
     return sendOkJson(req, true, "deleted");
 }
 
