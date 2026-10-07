@@ -2711,7 +2711,7 @@ static esp_err_t webHelmetMetaHandler(httpd_req_t* req) {
     strncpy(g_selectedHelmet, src, sizeof(g_selectedHelmet) - 1);
     char savedAlias[48] = "";
     char savedPhone[16] = "";
-    bool kept = helmetDirFileLookup(src, savedAlias, sizeof(savedAlias), savedPhone, sizeof(savedPhone));
+    helmetDirFileLookup(src, savedAlias, sizeof(savedAlias), savedPhone, sizeof(savedPhone));
     Serial.printf("[HELMET] save queued src=%s alias=%s phone=%s file=%s/%s\n",
                   src, alias, phone, savedAlias, savedPhone);
     strncpy(g_verifySrc, src, sizeof(g_verifySrc) - 1);
