@@ -2542,7 +2542,10 @@ static esp_err_t webHelmetMetaHandler(httpd_req_t* req) {
     int i = helmetDirFind(src);
     if (i < 0) helmetDirNote(src);
     i = helmetDirFind(src);
-    if (i < 0) return sendOkJson(req, false, "unknown helmet");
+    if (i < 0) {
+        Serial.printf("[HELMET] save fail src=%s reason=unknown\n", src);
+        return sendOkJson(req, false, "unknown helmet");
+    }
     strncpy(g_helmetDir[i].alias, alias, sizeof(g_helmetDir[i].alias) - 1);
     g_helmetDir[i].alias[sizeof(g_helmetDir[i].alias) - 1] = '\0';
     strncpy(g_helmetDir[i].phone, phone, sizeof(g_helmetDir[i].phone) - 1);
@@ -2550,6 +2553,7 @@ static esp_err_t webHelmetMetaHandler(httpd_req_t* req) {
     g_helmetDirDirty = true;
     helmetDirSave();
     strncpy(g_selectedHelmet, src, sizeof(g_selectedHelmet) - 1);
+    Serial.printf("[HELMET] save ok src=%s alias=%s phone=%s\n", src, alias, phone);
     return sendOkJson(req, true, "saved");
 }
 
@@ -2563,8 +2567,12 @@ static esp_err_t webHelmetDeleteHandler(httpd_req_t* req) {
     int i = helmetDirFind(src);
     if (i < 0) helmetDirNote(src);
     i = helmetDirFind(src);
-    if (i < 0) return sendOkJson(req, false, "unknown helmet");
+    if (i < 0) {
+        Serial.printf("[HELMET] delete fail src=%s reason=unknown\n", src);
+        return sendOkJson(req, false, "unknown helmet");
+    }
     helmetDirFileDelete(src);
+    Serial.printf("[HELMET] delete ok src=%s\n", src);
     for (int j = i; j + 1 < g_helmetDirCount; j++) g_helmetDir[j] = g_helmetDir[j + 1];
     g_helmetDirCount--;
     memset(&g_helmetDir[g_helmetDirCount], 0, sizeof(g_helmetDir[0]));
