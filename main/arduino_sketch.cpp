@@ -2209,64 +2209,10 @@ static bool helmetUsingFile(void) {
     return ensureSpiffsMounted();
 }
 
-static void helmetNvsUpsert(const char* ip, const char* alias, const char* phone) {
-    Preferences prefs;
-    if (!ip || !ip[0] || !prefs.begin("shdir", false)) {
-        Serial.println("[HELMET] nvs open failed");
-        return;
-    }
-    int n = prefs.getInt("n", 0);
-    char key[16];
-    String line = String(ip) + "," + (alias ? alias : "") + "," + (phone ? phone : "");
-    bool replaced = false;
-    for (int i = 0; i < n && i < 64; i++) {
-        snprintf(key, sizeof(key), "r%u", (unsigned)i);
-        String cur = prefs.getString(key, "");
-        int c1 = cur.indexOf(',');
-        if (c1 > 0 && cur.substring(0, c1) == ip) {
-            prefs.putString(key, line);
-            replaced = true;
-            break;
-        }
-    }
-    if (!replaced && n < 64) {
-        snprintf(key, sizeof(key), "r%u", (unsigned)n);
-        prefs.putString(key, line);
-        prefs.putInt("n", n + 1);
-    }
-    prefs.end();
-    Serial.printf("[HELMET] nvs stored %s\n", line.c_str());
-}
-
-static bool helmetNvsLookup(const char* ip, char* alias, size_t aliasN, char* phone, size_t phoneN) {
-    Preferences prefs;
-    if (alias && aliasN) alias[0] = '\0';
-    if (phone && phoneN) phone[0] = '\0';
-    if (!ip || !prefs.begin("shdir", false)) return false;
-    int n = prefs.getInt("n", 0);
-    bool found = false;
-    for (int i = 0; i < n && i < 64; i++) {
-        char key[16];
-        snprintf(key, sizeof(key), "r%u", (unsigned)i);
-        String cur = prefs.getString(key, "");
-        int c1 = cur.indexOf(',');
-        if (c1 < 1 || cur.substring(0, c1) != ip) continue;
-        int c2 = cur.indexOf(',', c1 + 1);
-        String a = (c2 > c1) ? cur.substring(c1 + 1, c2) : cur.substring(c1 + 1);
-        String ph = (c2 > c1) ? cur.substring(c2 + 1) : "";
-        if (alias && aliasN) strncpy(alias, a.c_str(), aliasN - 1);
-        if (phone && phoneN) strncpy(phone, ph.c_str(), phoneN - 1);
-        found = true;
-        break;
-    }
-    prefs.end();
-    return found;
-}
-
 static void helmetDirFileUpsert(const char* ip, const char* alias, const char* phone) {
     if (!ip || !ip[0]) return;
     if (!helmetUsingFile()) {
-        helmetNvsUpsert(ip, alias, phone);
+        Serial.println("[HELMET] file skip: spiffs not mounted");
         return;
     }
     String body;
@@ -2390,9 +2336,7 @@ static int helmetDirNote(const char* ip) {
         i = g_helmetDirCount++;
         memset(&g_helmetDir[i], 0, sizeof(g_helmetDir[i]));
         strncpy(g_helmetDir[i].ipv6, ip, sizeof(g_helmetDir[i].ipv6) - 1);
-        bool loaded = helmetUsingFile() ? helmetDirFileLookup(ip, g_helmetDir[i].alias, sizeof(g_helmetDir[i].alias), g_helmetDir[i].phone, sizeof(g_helmetDir[i].phone))
-                                         : helmetNvsLookup(ip, g_helmetDir[i].alias, sizeof(g_helmetDir[i].alias), g_helmetDir[i].phone, sizeof(g_helmetDir[i].phone));
-        if (!loaded) {
+        if (!helmetDirFileLookup(ip, g_helmetDir[i].alias, sizeof(g_helmetDir[i].alias), g_helmetDir[i].phone, sizeof(g_helmetDir[i].phone))) {
             Serial.printf("[HELMET] new src=%s not in file\n", ip);
         } else {
             Serial.printf("[HELMET] loaded src=%s alias=%s phone=%s\n", ip, g_helmetDir[i].alias, g_helmetDir[i].phone);
@@ -2532,11 +2476,12 @@ static const char HELMET_HTML[] =
     "<button id='btnDataReset' type='button'>초기화</button></div>"
     "<div class='meta' id='meta'>waiting</div></header><div class='grid' id='grid'></div>"
     "<script>"
-    "const keys=['motion','fall','pulse','body','amb','rh','voc','co','nh3','no2'];"
+    "const keys=['motion','fall','pulse','body','amb','rh','voc','co','nh3','no2'];""const names={motion:'움직임',fall:'낙상',pulse:'맥박',body:'체온',amb:'기온',rh:'습도',voc:'VOC',co:'일산화탄소',nh3:'암모니아',no2:'이산화질소'};"
     "let selected='';"
     "function cls(k,v){if(k=='fall'&&v=='yes')return 'bad';if(k=='pulse'&&(v=='rising'||v=='falling'))return 'warn';return 'ok';}"
+    "function koVal(k,v){if(!v)return '-';var m={motion:{moving:'움직임',still:'정지'},fall:{yes:'예',no:'아니오'},pulse:{unknown:'미정',stable:'안정적',rising:'상승',falling:'하강'}};return (m[k]&&m[k][v])?m[k][v]:v;}"
     "function paint(d){var cur=(window._items||[]).find(it=>it.ipv6==(d.src||selected))||{};var who=(cur.alias||'')+(cur.phone?(' '+cur.phone):'');document.getElementById('meta').textContent=(who?who+' / ':'')+(d.src||'-')+(d.has_data?('  '+d.age_s+'s ago'):'');"
-    "document.getElementById('grid').innerHTML=keys.map(k=>'<div class=\"card\"><div class=\"k\">'+k+'</div><div class=\"v '+cls(k,d[k]||'')+'\">'+(d[k]||'-')+'</div></div>').join('');}"
+    "document.getElementById('grid').innerHTML=keys.map(k=>'<div class=\"card\"><div class=\"k\">'+(names[k]||k)+'</div><div class=\"v '+cls(k,d[k]||'')+'\">'+koVal(k,d[k])+'</div></div>').join('');}"
     "function loadOne(){var u=selected?('/api/helmet?src='+encodeURIComponent(selected)):'/api/helmet';fetch(u).then(r=>r.json()).then(paint).catch(()=>{});}"
     "function fillMeta(){const cur=(window._items||[]).find(it=>it.ipv6==selected)||{};document.getElementById('alias').value=cur.alias||'';document.getElementById('phone').value=cur.phone||'';}"
     "function loadList(){fetch('/api/helmets').then(r=>r.json()).then(j=>{"
@@ -2596,29 +2541,7 @@ static bool helmetListHas(const String& body, const char* ip) {
 static esp_err_t webHelmetsHandler(httpd_req_t* req) {
     String body = "{\"max\":1024,\"count\":" + String(g_helmetDirStored) + ",\"items\":[";
     bool first = true;
-    if (!ensureSpiffsMounted()) {
-        Preferences prefs;
-        if (prefs.begin("shdir", false)) {
-            int n = prefs.getInt("n", 0);
-            for (int i = 0; i < n && i < 64; i++) {
-                char key[16];
-                snprintf(key, sizeof(key), "r%u", (unsigned)i);
-                String line = prefs.getString(key, "");
-                int c1 = line.indexOf(',');
-                if (c1 < 1) continue;
-                String ip = line.substring(0, c1);
-                int c2 = line.indexOf(',', c1 + 1);
-                String alias = (c2 > c1) ? line.substring(c1 + 1, c2) : line.substring(c1 + 1);
-                String phone = (c2 > c1) ? line.substring(c2 + 1) : "";
-                if (!first) body += ",";
-                first = false;
-                body += "{\"ipv6\":\"" + jsonEscape(ip.c_str()) + "\"";
-                body += ",\"alias\":\"" + jsonEscape(alias.c_str()) + "\"";
-                body += ",\"phone\":\"" + jsonEscape(phone.c_str()) + "\"}";
-            }
-            prefs.end();
-        }
-    } else if (ensureSpiffsMounted()) {
+    if (ensureSpiffsMounted()) {
         File f = SPIFFS.open("/helmet_dir.csv", "r");
         if (f) {
             while (f.available()) {
@@ -2687,8 +2610,7 @@ static esp_err_t webHelmetMetaHandler(httpd_req_t* req) {
     strncpy(g_selectedHelmet, src, sizeof(g_selectedHelmet) - 1);
     char savedAlias[48] = "";
     char savedPhone[16] = "";
-    bool kept = helmetUsingFile() ? helmetDirFileLookup(src, savedAlias, sizeof(savedAlias), savedPhone, sizeof(savedPhone))
-                                 : helmetNvsLookup(src, savedAlias, sizeof(savedAlias), savedPhone, sizeof(savedPhone));
+    bool kept = helmetDirFileLookup(src, savedAlias, sizeof(savedAlias), savedPhone, sizeof(savedPhone));
     Serial.printf("[HELMET] save queued src=%s alias=%s phone=%s file=%s/%s\n",
                   src, alias, phone, savedAlias, savedPhone);
     strncpy(g_verifySrc, src, sizeof(g_verifySrc) - 1);
@@ -5174,8 +5096,7 @@ void loop() {
         g_verifyAt = 0;
         char alias[48] = "";
         char phone[16] = "";
-        bool ok = helmetUsingFile() ? helmetDirFileLookup(g_verifySrc, alias, sizeof(alias), phone, sizeof(phone))
-                                    : helmetNvsLookup(g_verifySrc, alias, sizeof(alias), phone, sizeof(phone));
+        bool ok = helmetDirFileLookup(g_verifySrc, alias, sizeof(alias), phone, sizeof(phone));
         bool match = ok && strcmp(alias, g_verifyAlias) == 0 && strcmp(phone, g_verifyPhone) == 0;
         Serial.print("\033[31m");
         Serial.printf("[HELMET] verify %s src=%s saved=%s/%s read=%s/%s\n",
