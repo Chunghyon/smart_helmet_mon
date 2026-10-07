@@ -1618,6 +1618,8 @@ static bool sendRestartSensor(const char* only) {
     return strstr(g_restartReply, "fail") == NULL && strstr(g_restartReply, "Fail") == NULL;
 }
 
+static void urlDecode(char* s);
+
 static esp_err_t handleDataReset(httpd_req_t *req) {
     char q[96] = "";
     char src[48] = "";
