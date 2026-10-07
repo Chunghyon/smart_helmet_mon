@@ -1603,41 +1603,30 @@ static void sendRestartTo(const char* dst) {
     Serial.printf("[RESET] dst=%s reply=%s\n", addr, g_restartReply);
 }
 
-static bool sendRestartSensor(void) {
+static bool sendRestartSensor(const char* only) {
     g_restartReply[0] = '\0';
+    if (!only || !only[0]) {
+        strncpy(g_restartReply, "no selected helmet", sizeof(g_restartReply) - 1);
+        return false;
+    }
     if (!ensureATCommandMode()) {
         Serial.println("[RESET] at mode failed");
         strncpy(g_restartReply, "at mode failed", sizeof(g_restartReply) - 1);
         return false;
     }
-    bool any = false;
-    if (g_lastHelmetDst[0]) {
-        sendRestartTo(g_lastHelmetDst);
-        any = true;
-    }
-    for (int i = 0; i < g_keyIpCount; i++) {
-        if (!g_keyIps[i].ipv6[0]) continue;
-        if (g_lastHelmetDst[0] && strcmp(g_keyIps[i].ipv6, g_lastHelmetDst) == 0) continue;
-        sendRestartTo(g_keyIps[i].ipv6);
-        any = true;
-    }
-    if (MULTICAST_ADDRESS[0]) {
-        sendRestartTo(MULTICAST_ADDRESS);
-        any = true;
-    }
-    if (!any) strncpy(g_restartReply, "no destination", sizeof(g_restartReply) - 1);
-    return any && strstr(g_restartReply, "send fail") == NULL && strstr(g_restartReply, "failed") == NULL;
+    sendRestartTo(only);
+    return strstr(g_restartReply, "fail") == NULL && strstr(g_restartReply, "Fail") == NULL;
 }
 
 static esp_err_t handleDataReset(httpd_req_t *req) {
-    bool sent = sendRestartSensor();
-    g_cellStateCount = 0;
-    g_nodeCount = 0;
-    g_keyIpCount = 0;
-    g_keyIpDirty = true;
-    clearAllWarnings();
-    notifyWebClients("", "", "data_reset", "", "", "");
-    Serial.println("[WEB] data reset");
+    char q[96] = "";
+    char src[48] = "";
+    if (httpd_req_get_url_query_str(req, q, sizeof(q)) == ESP_OK) {
+        httpd_query_key_value(q, "src", src, sizeof(src));
+    }
+    if (!src[0]) strncpy(src, g_lastHelmetDst, sizeof(src) - 1);
+    bool sent = sendRestartSensor(src);
+    Serial.printf("[WEB] data reset src=%s\n", src);
     return sendOkJson(req, sent, g_restartReply[0] ? g_restartReply : "no reply");
 }
 
@@ -2127,6 +2116,117 @@ static esp_err_t webPacketStreamHandler(httpd_req_t* req) {
         return false;
     }
 
+
+#define HELMET_DIR_MAX 1024
+#define HELMET_LIVE_MAX 64
+#define HELMET_CONNECTED_MS 20000UL
+
+struct HelmetId {
+    char ipv6[40];
+    char alias[24];
+    char phone[16];
+    uint32_t lastSeenMs;
+};
+struct HelmetLive {
+    char ipv6[40];
+    char motion[12];
+    char fall[8];
+    char pulse[12];
+    char body[16];
+    char amb[16];
+    char rh[12];
+    char voc[12];
+    char co[12];
+    char nh3[12];
+    char no2[12];
+    uint32_t updatedMs;
+};
+static HelmetId* g_helmetDir = nullptr;
+static int g_helmetDirCount = 0;
+static HelmetLive g_helmetLive[HELMET_LIVE_MAX];
+static int g_helmetLiveCount = 0;
+static char g_selectedHelmet[40];
+static bool g_helmetDirDirty = false;
+
+static void helmetDirEnsure(void) {
+    if (g_helmetDir) return;
+    g_helmetDir = (HelmetId*)calloc(HELMET_DIR_MAX, sizeof(HelmetId));
+    if (!g_helmetDir) Serial.println("[HELMET] dir alloc failed");
+}
+
+static int helmetDirFind(const char* ip) {
+    if (!g_helmetDir || !ip) return -1;
+    for (int i = 0; i < g_helmetDirCount; i++) {
+        if (strcmp(g_helmetDir[i].ipv6, ip) == 0) return i;
+    }
+    return -1;
+}
+
+static void helmetDirSave(void) {
+    if (!g_helmetDir || !g_helmetDirDirty) return;
+    if (!ensureSpiffsMounted()) return;
+    File f = SPIFFS.open("/helmet_dir.csv", "w");
+    if (!f) return;
+    for (int i = 0; i < g_helmetDirCount; i++) {
+        f.printf("%s,%s,%s\n", g_helmetDir[i].ipv6, g_helmetDir[i].alias, g_helmetDir[i].phone);
+    }
+    f.close();
+    g_helmetDirDirty = false;
+    Serial.printf("[HELMET] saved %d\n", g_helmetDirCount);
+}
+
+static void helmetDirLoad(void) {
+    helmetDirEnsure();
+    if (!g_helmetDir || !ensureSpiffsMounted()) return;
+    File f = SPIFFS.open("/helmet_dir.csv", "r");
+    if (!f) return;
+    while (f.available() && g_helmetDirCount < HELMET_DIR_MAX) {
+        String line = f.readStringUntil('\n');
+        line.trim();
+        if (!line.length()) continue;
+        int c1 = line.indexOf(',');
+        int c2 = line.indexOf(',', c1 + 1);
+        if (c1 < 1) continue;
+        String ip = line.substring(0, c1);
+        String alias = (c2 > c1) ? line.substring(c1 + 1, c2) : line.substring(c1 + 1);
+        String phone = (c2 > c1) ? line.substring(c2 + 1) : "";
+        HelmetId* s = &g_helmetDir[g_helmetDirCount++];
+        strncpy(s->ipv6, ip.c_str(), sizeof(s->ipv6) - 1);
+        strncpy(s->alias, alias.c_str(), sizeof(s->alias) - 1);
+        strncpy(s->phone, phone.c_str(), sizeof(s->phone) - 1);
+    }
+    f.close();
+    Serial.printf("[HELMET] loaded %d\n", g_helmetDirCount);
+}
+
+static int helmetDirNote(const char* ip) {
+    if (!ip || !ip[0]) return -1;
+    helmetDirEnsure();
+    if (!g_helmetDir) return -1;
+    int i = helmetDirFind(ip);
+    if (i < 0) {
+        if (g_helmetDirCount >= HELMET_DIR_MAX) return -1;
+        i = g_helmetDirCount++;
+        strncpy(g_helmetDir[i].ipv6, ip, sizeof(g_helmetDir[i].ipv6) - 1);
+        g_helmetDirDirty = true;
+    }
+    g_helmetDir[i].lastSeenMs = millis();
+    if (!g_selectedHelmet[0]) strncpy(g_selectedHelmet, ip, sizeof(g_selectedHelmet) - 1);
+    strncpy(g_lastHelmetDst, ip, sizeof(g_lastHelmetDst) - 1);
+    return i;
+}
+
+static int helmetLiveFind(const char* ip) {
+    for (int i = 0; i < g_helmetLiveCount; i++) {
+        if (strcmp(g_helmetLive[i].ipv6, ip) == 0) return i;
+    }
+    if (g_helmetLiveCount >= HELMET_LIVE_MAX) return 0;
+    int i = g_helmetLiveCount++;
+    memset(&g_helmetLive[i], 0, sizeof(g_helmetLive[i]));
+    strncpy(g_helmetLive[i].ipv6, ip, sizeof(g_helmetLive[i].ipv6) - 1);
+    return i;
+}
+
 struct HelmetReport {
     char src[48];
     char motion[16];
@@ -2165,13 +2265,22 @@ static void ingestHelmetText(const char* src, const char* payload) {
             strncpy(g_helmet.src, ip, n);
             g_helmet.src[n] = '\0';
             strncpy(g_lastHelmetDst, g_helmet.src, sizeof(g_lastHelmetDst) - 1);
+            helmetDirNote(g_helmet.src);
             body = end + 1;
             if (*body == ':') body++;
         }
     } else if (src && src[0]) {
         strncpy(g_helmet.src, src, sizeof(g_helmet.src) - 1);
+        helmetDirNote(g_helmet.src);
     }
     helmetTake(body, "motion:", g_helmet.motion, sizeof(g_helmet.motion));
+    {
+        int li = helmetLiveFind(g_helmet.src);
+        if (li >= 0) {
+            strncpy(g_helmetLive[li].ipv6, g_helmet.src, sizeof(g_helmetLive[li].ipv6) - 1);
+            g_helmetLive[li].updatedMs = millis();
+        }
+    }
     helmetTake(body, "fall:", g_helmet.fall, sizeof(g_helmet.fall));
     helmetTake(body, "pulse:", g_helmet.pulse, sizeof(g_helmet.pulse));
     helmetTake(body, "body:", g_helmet.body, sizeof(g_helmet.body));
@@ -2181,6 +2290,22 @@ static void ingestHelmetText(const char* src, const char* payload) {
     helmetTake(body, "co:", g_helmet.co, sizeof(g_helmet.co));
     helmetTake(body, "nh3:", g_helmet.nh3, sizeof(g_helmet.nh3));
     helmetTake(body, "no2:", g_helmet.no2, sizeof(g_helmet.no2));
+    {
+        int li = helmetLiveFind(g_helmet.src);
+        if (li >= 0 && g_helmet.src[0]) {
+            strncpy(g_helmetLive[li].motion, g_helmet.motion, sizeof(g_helmetLive[li].motion) - 1);
+            strncpy(g_helmetLive[li].fall, g_helmet.fall, sizeof(g_helmetLive[li].fall) - 1);
+            strncpy(g_helmetLive[li].pulse, g_helmet.pulse, sizeof(g_helmetLive[li].pulse) - 1);
+            strncpy(g_helmetLive[li].body, g_helmet.body, sizeof(g_helmetLive[li].body) - 1);
+            strncpy(g_helmetLive[li].amb, g_helmet.amb, sizeof(g_helmetLive[li].amb) - 1);
+            strncpy(g_helmetLive[li].rh, g_helmet.rh, sizeof(g_helmetLive[li].rh) - 1);
+            strncpy(g_helmetLive[li].voc, g_helmet.voc, sizeof(g_helmetLive[li].voc) - 1);
+            strncpy(g_helmetLive[li].co, g_helmet.co, sizeof(g_helmetLive[li].co) - 1);
+            strncpy(g_helmetLive[li].nh3, g_helmet.nh3, sizeof(g_helmetLive[li].nh3) - 1);
+            strncpy(g_helmetLive[li].no2, g_helmet.no2, sizeof(g_helmetLive[li].no2) - 1);
+            g_helmetLive[li].updatedMs = millis();
+        }
+    }
 }
 
 static const char HELMET_HTML[] =
@@ -2188,42 +2313,138 @@ static const char HELMET_HTML[] =
     "<meta name='viewport' content='width=device-width,initial-scale=1'>"
     "<title>Smart Helmet</title><style>"
     "body{font-family:sans-serif;background:#101418;color:#e8eef2;margin:0}"
-    "header{padding:16px 20px;background:#182028;display:flex;justify-content:space-between;align-items:center;gap:12px}"
+    "header{padding:16px 20px;background:#182028}"
     "h1{margin:0;font-size:22px}"
-    ".meta{color:#9ab;font-size:13px;margin-top:6px}"
-    "#btnDataReset{background:#166534;color:#fff;border:1px solid #86efac;border-radius:8px;padding:10px 16px;font-size:16px;font-weight:700;cursor:pointer}"
+    ".row{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-top:10px}"
+    "select,input{background:#101820;color:#e8eef2;border:1px solid #345;border-radius:8px;padding:8px;min-width:180px}"
+    "button{border-radius:8px;padding:8px 14px;font-weight:700;cursor:pointer}"
+    "#btnDataReset{background:#166534;color:#fff;border:1px solid #86efac}"
+    "#del{background:#7f1d1d;color:#fff;border:1px solid #fca5a5}"
+    ".meta{color:#9ab;font-size:13px;margin-top:8px}"
     ".grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:12px;padding:16px}"
     ".card{background:#1c2630;border-radius:10px;padding:14px}"
     ".k{color:#8aa;font-size:12px;text-transform:uppercase}.v{font-size:28px;margin-top:6px}"
     ".bad{color:#f66}.warn{color:#fc6}.ok{color:#6d6}"
-    "</style></head><body><header><div><h1>Smart Helmet</h1>"
-    "<div class='meta' id='meta'>waiting</div></div>"
-    "<button id='btnDataReset' type='button'>초기화</button></header><div class='grid' id='grid'></div>"
+    "</style></head><body><header><h1>Smart Helmet</h1>"
+    "<div class='row'><select id='sel'></select>"
+    "<input id='alias' placeholder='별명'>"
+    "<input id='phone' placeholder='전화번호'>"
+    "<button id='del' type='button'>삭제</button>"
+    "<button id='btnDataReset' type='button'>초기화</button></div>"
+    "<div class='meta' id='meta'>waiting</div></header><div class='grid' id='grid'></div>"
     "<script>"
-    "document.getElementById('btnDataReset').onclick=function(){fetch('/api/data_reset').then(function(r){return r.json();}).then(function(j){document.getElementById('meta').textContent=(j&&j.msg)?j.msg:'no reply';}).catch(function(){document.getElementById('meta').textContent='reset failed';});};"
     "const keys=['motion','fall','pulse','body','amb','rh','voc','co','nh3','no2'];"
+    "let selected='';"
     "function cls(k,v){if(k=='fall'&&v=='yes')return 'bad';if(k=='pulse'&&(v=='rising'||v=='falling'))return 'warn';return 'ok';}"
     "function paint(d){document.getElementById('meta').textContent=(d.src||'-')+'  '+(d.age_s==null?'':d.age_s+'s ago');"
     "document.getElementById('grid').innerHTML=keys.map(k=>'<div class=\"card\"><div class=\"k\">'+k+'</div><div class=\"v '+cls(k,d[k]||'')+'\">'+(d[k]||'-')+'</div></div>').join('');}"
-    "function tick(){fetch('/api/helmet').then(r=>r.json()).then(paint).catch(()=>{});}"
-    "tick();setInterval(tick,2000);</script></body></html>";
+    "function loadOne(){if(!selected){paint({});return;}fetch('/api/helmet?src='+encodeURIComponent(selected)).then(r=>r.json()).then(paint).catch(()=>{});}"
+    "function loadList(){fetch('/api/helmets').then(r=>r.json()).then(j=>{"
+    "const sel=document.getElementById('sel');const prev=selected||sel.value;"
+    "sel.innerHTML='';(j.items||[]).forEach(it=>{const o=document.createElement('option');o.value=it.ipv6;o.textContent=it.ipv6;sel.appendChild(o);});"
+    "if(prev && Array.from(sel.options).some(o=>o.value==prev)) sel.value=prev; else if(sel.options.length) sel.value=sel.options[0].value;"
+    "selected=sel.value;const cur=(j.items||[]).find(it=>it.ipv6==selected)||{};"
+    "document.getElementById('alias').value=cur.alias||'';document.getElementById('phone').value=cur.phone||'';loadOne();"
+    "}).catch(()=>{});}"
+    "document.getElementById('sel').onchange=function(){selected=this.value;loadList();};"
+    "function saveMeta(){if(!selected)return;fetch('/api/helmet_meta?src='+encodeURIComponent(selected)+'&alias='+encodeURIComponent(document.getElementById('alias').value)+'&phone='+encodeURIComponent(document.getElementById('phone').value));}"
+    "document.getElementById('alias').onchange=saveMeta;document.getElementById('phone').onchange=saveMeta;"
+    "document.getElementById('del').onclick=function(){if(!selected)return;fetch('/api/helmet_delete?src='+encodeURIComponent(selected)).then(()=>{selected='';loadList();});};"
+    "document.getElementById('btnDataReset').onclick=function(){if(!selected){document.getElementById('meta').textContent='no selected helmet';return;}"
+    "fetch('/api/data_reset?src='+encodeURIComponent(selected)).then(r=>r.json()).then(j=>{document.getElementById('meta').textContent=(j&&j.msg)?j.msg:'no reply';}).catch(()=>{document.getElementById('meta').textContent='reset failed';});};"
+    "loadList();setInterval(loadList,2000);</script></body></html>";
+
+static HelmetLive* helmetLiveBySrc(const char* src) {
+    if (!src || !src[0]) return nullptr;
+    for (int i = 0; i < g_helmetLiveCount; i++) {
+        if (strcmp(g_helmetLive[i].ipv6, src) == 0) return &g_helmetLive[i];
+    }
+    return nullptr;
+}
+
+static esp_err_t webHelmetsHandler(httpd_req_t* req) {
+    helmetDirSave();
+    String body = "{\"max\":1024,\"count\":" + String(g_helmetDirCount) + ",\"items\":[";
+    unsigned long now = millis();
+    bool first = true;
+    if (g_helmetDir) {
+        for (int i = 0; i < g_helmetDirCount; i++) {
+            if (!g_helmetDir[i].lastSeenMs) continue;
+            if (now - g_helmetDir[i].lastSeenMs > HELMET_CONNECTED_MS) continue;
+            if (!first) body += ",";
+            first = false;
+            body += "{\"ipv6\":\"" + jsonEscape(g_helmetDir[i].ipv6) + "\"";
+            body += ",\"alias\":\"" + jsonEscape(g_helmetDir[i].alias) + "\"";
+            body += ",\"phone\":\"" + jsonEscape(g_helmetDir[i].phone) + "\"}";
+        }
+    }
+    body += "]}";
+    return sendWebResponse(req, "application/json", body.c_str(), body.length(), "helmets");
+}
+
+static esp_err_t webHelmetMetaHandler(httpd_req_t* req) {
+    char q[160] = "";
+    char src[48] = "";
+    char alias[24] = "";
+    char phone[16] = "";
+    if (httpd_req_get_url_query_str(req, q, sizeof(q)) == ESP_OK) {
+        httpd_query_key_value(q, "src", src, sizeof(src));
+        httpd_query_key_value(q, "alias", alias, sizeof(alias));
+        httpd_query_key_value(q, "phone", phone, sizeof(phone));
+    }
+    int i = helmetDirFind(src);
+    if (i < 0) return sendOkJson(req, false, "unknown helmet");
+    strncpy(g_helmetDir[i].alias, alias, sizeof(g_helmetDir[i].alias) - 1);
+    g_helmetDir[i].alias[sizeof(g_helmetDir[i].alias) - 1] = '\\0';
+    strncpy(g_helmetDir[i].phone, phone, sizeof(g_helmetDir[i].phone) - 1);
+    g_helmetDir[i].phone[sizeof(g_helmetDir[i].phone) - 1] = '\\0';
+    g_helmetDirDirty = true;
+    helmetDirSave();
+    strncpy(g_selectedHelmet, src, sizeof(g_selectedHelmet) - 1);
+    return sendOkJson(req, true, "saved");
+}
+
+static esp_err_t webHelmetDeleteHandler(httpd_req_t* req) {
+    char q[96] = "";
+    char src[48] = "";
+    if (httpd_req_get_url_query_str(req, q, sizeof(q)) == ESP_OK) {
+        httpd_query_key_value(q, "src", src, sizeof(src));
+    }
+    int i = helmetDirFind(src);
+    if (i < 0) return sendOkJson(req, false, "unknown helmet");
+    for (int j = i; j + 1 < g_helmetDirCount; j++) g_helmetDir[j] = g_helmetDir[j + 1];
+    g_helmetDirCount--;
+    memset(&g_helmetDir[g_helmetDirCount], 0, sizeof(g_helmetDir[0]));
+    g_helmetDirDirty = true;
+    helmetDirSave();
+    if (strcmp(g_selectedHelmet, src) == 0) g_selectedHelmet[0] = '\\0';
+    return sendOkJson(req, true, "deleted");
+}
 
 static esp_err_t webHelmetApiHandler(httpd_req_t* req) {
-    unsigned long age = g_helmet.updatedMs ? (millis() - g_helmet.updatedMs) / 1000UL : 0;
+    char q[96] = "";
+    char src[48] = "";
+    if (httpd_req_get_url_query_str(req, q, sizeof(q)) == ESP_OK) {
+        httpd_query_key_value(q, "src", src, sizeof(src));
+    }
+    if (!src[0]) strncpy(src, g_selectedHelmet, sizeof(src) - 1);
+    if (src[0]) strncpy(g_selectedHelmet, src, sizeof(g_selectedHelmet) - 1);
+    HelmetLive* live = helmetLiveBySrc(src);
+    unsigned long age = (live && live->updatedMs) ? (millis() - live->updatedMs) / 1000UL : 0;
     String body = "{";
-    body += "\"src\":\"" + jsonEscape(g_helmet.src) + "\"";
-    body += ",\"motion\":\"" + jsonEscape(g_helmet.motion) + "\"";
-    body += ",\"fall\":\"" + jsonEscape(g_helmet.fall) + "\"";
-    body += ",\"pulse\":\"" + jsonEscape(g_helmet.pulse) + "\"";
-    body += ",\"body\":\"" + jsonEscape(g_helmet.body) + "\"";
-    body += ",\"amb\":\"" + jsonEscape(g_helmet.amb) + "\"";
-    body += ",\"rh\":\"" + jsonEscape(g_helmet.rh) + "\"";
-    body += ",\"voc\":\"" + jsonEscape(g_helmet.voc) + "\"";
-    body += ",\"co\":\"" + jsonEscape(g_helmet.co) + "\"";
-    body += ",\"nh3\":\"" + jsonEscape(g_helmet.nh3) + "\"";
-    body += ",\"no2\":\"" + jsonEscape(g_helmet.no2) + "\"";
-    body += ",\"age_s\":" + String(g_helmet.updatedMs ? age : 0);
-    body += ",\"has_data\":" + String(g_helmet.updatedMs ? "true" : "false");
+    body += "\"src\":\"" + jsonEscape(src) + "\"";
+    body += ",\"motion\":\"" + jsonEscape(live ? live->motion : "") + "\"";
+    body += ",\"fall\":\"" + jsonEscape(live ? live->fall : "") + "\"";
+    body += ",\"pulse\":\"" + jsonEscape(live ? live->pulse : "") + "\"";
+    body += ",\"body\":\"" + jsonEscape(live ? live->body : "") + "\"";
+    body += ",\"amb\":\"" + jsonEscape(live ? live->amb : "") + "\"";
+    body += ",\"rh\":\"" + jsonEscape(live ? live->rh : "") + "\"";
+    body += ",\"voc\":\"" + jsonEscape(live ? live->voc : "") + "\"";
+    body += ",\"co\":\"" + jsonEscape(live ? live->co : "") + "\"";
+    body += ",\"nh3\":\"" + jsonEscape(live ? live->nh3 : "") + "\"";
+    body += ",\"no2\":\"" + jsonEscape(live ? live->no2 : "") + "\"";
+    body += ",\"age_s\":" + String(live ? age : 0);
+    body += ",\"has_data\":" + String(live && live->updatedMs ? "true" : "false");
     body += "}";
     return sendWebResponse(req, "application/json", body.c_str(), body.length(), "helmet");
 }
@@ -2516,6 +2737,24 @@ void startWebServer() {
             .handler = handleDataReset,
             .user_ctx = nullptr
         };
+        httpd_uri_t uHelmets = {
+            .uri = "/api/helmets",
+            .method = HTTP_GET,
+            .handler = webHelmetsHandler,
+            .user_ctx = nullptr
+        };
+        httpd_uri_t uHelmetMeta = {
+            .uri = "/api/helmet_meta",
+            .method = HTTP_GET,
+            .handler = webHelmetMetaHandler,
+            .user_ctx = nullptr
+        };
+        httpd_uri_t uHelmetDelete = {
+            .uri = "/api/helmet_delete",
+            .method = HTTP_GET,
+            .handler = webHelmetDeleteHandler,
+            .user_ctx = nullptr
+        };
         httpd_uri_t uCheckInterval = {
             .uri = "/api/check_interval",
             .method = HTTP_GET,
@@ -2574,6 +2813,9 @@ void startWebServer() {
         httpd_register_uri_handler(g_httpServer, &uWs);
         httpd_register_uri_handler(g_httpServer, &uFireClear);
         httpd_register_uri_handler(g_httpServer, &uDataReset);
+        httpd_register_uri_handler(g_httpServer, &uHelmets);
+        httpd_register_uri_handler(g_httpServer, &uHelmetMeta);
+        httpd_register_uri_handler(g_httpServer, &uHelmetDelete);
         httpd_register_uri_handler(g_httpServer, &uCheckInterval);
         httpd_register_uri_handler(g_httpServer, &uStatusCheck);
         httpd_register_uri_handler(g_httpServer, &uNetworkCheck);
@@ -4556,6 +4798,7 @@ void setup() {
 
     loadConfig();
     loadRuntimeState();
+    helmetDirLoad();
     updateBluetoothDeviceName();
 
     initOled();
