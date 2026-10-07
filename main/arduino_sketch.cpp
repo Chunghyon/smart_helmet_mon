@@ -1324,9 +1324,13 @@ static bool ensureSpiffsMounted() {
     }
 
     if (!SPIFFS.begin(false)) {
-        Serial.println("[SPIFFS] Mount failed; using embedded/default data only.");
-        s_spiffsState = 0;
-        return false;
+        Serial.println("[SPIFFS] Mount failed, formatting once");
+        if (!SPIFFS.begin(true)) {
+            Serial.println("[SPIFFS] Format failed; helmet store will use NVS");
+            s_spiffsState = 0;
+            return false;
+        }
+        Serial.println("[SPIFFS] Formatted and mounted");
     }
 
     s_spiffsState = 1;
@@ -2201,10 +2205,68 @@ static void helmetDirDumpRed(const char* tag) {
     Serial.print("\033[0m");
 }
 
+static bool helmetUsingFile(void) {
+    return ensureSpiffsMounted();
+}
+
+static void helmetNvsUpsert(const char* ip, const char* alias, const char* phone) {
+    Preferences prefs;
+    if (!ip || !ip[0] || !prefs.begin("shdir", false)) {
+        Serial.println("[HELMET] nvs open failed");
+        return;
+    }
+    int n = prefs.getInt("n", 0);
+    char key[16];
+    String line = String(ip) + "," + (alias ? alias : "") + "," + (phone ? phone : "");
+    bool replaced = false;
+    for (int i = 0; i < n && i < 64; i++) {
+        snprintf(key, sizeof(key), "r%u", (unsigned)i);
+        String cur = prefs.getString(key, "");
+        int c1 = cur.indexOf(',');
+        if (c1 > 0 && cur.substring(0, c1) == ip) {
+            prefs.putString(key, line);
+            replaced = true;
+            break;
+        }
+    }
+    if (!replaced && n < 64) {
+        snprintf(key, sizeof(key), "r%u", (unsigned)n);
+        prefs.putString(key, line);
+        prefs.putInt("n", n + 1);
+    }
+    prefs.end();
+    Serial.printf("[HELMET] nvs stored %s\n", line.c_str());
+}
+
+static bool helmetNvsLookup(const char* ip, char* alias, size_t aliasN, char* phone, size_t phoneN) {
+    Preferences prefs;
+    if (alias && aliasN) alias[0] = '\0';
+    if (phone && phoneN) phone[0] = '\0';
+    if (!ip || !prefs.begin("shdir", false)) return false;
+    int n = prefs.getInt("n", 0);
+    bool found = false;
+    for (int i = 0; i < n && i < 64; i++) {
+        char key[16];
+        snprintf(key, sizeof(key), "r%u", (unsigned)i);
+        String cur = prefs.getString(key, "");
+        int c1 = cur.indexOf(',');
+        if (c1 < 1 || cur.substring(0, c1) != ip) continue;
+        int c2 = cur.indexOf(',', c1 + 1);
+        String a = (c2 > c1) ? cur.substring(c1 + 1, c2) : cur.substring(c1 + 1);
+        String ph = (c2 > c1) ? cur.substring(c2 + 1) : "";
+        if (alias && aliasN) strncpy(alias, a.c_str(), aliasN - 1);
+        if (phone && phoneN) strncpy(phone, ph.c_str(), phoneN - 1);
+        found = true;
+        break;
+    }
+    prefs.end();
+    return found;
+}
+
 static void helmetDirFileUpsert(const char* ip, const char* alias, const char* phone) {
     if (!ip || !ip[0]) return;
-    if (!ensureSpiffsMounted()) {
-        Serial.println("[HELMET] file skip: spiffs not mounted");
+    if (!helmetUsingFile()) {
+        helmetNvsUpsert(ip, alias, phone);
         return;
     }
     String body;
@@ -2328,7 +2390,9 @@ static int helmetDirNote(const char* ip) {
         i = g_helmetDirCount++;
         memset(&g_helmetDir[i], 0, sizeof(g_helmetDir[i]));
         strncpy(g_helmetDir[i].ipv6, ip, sizeof(g_helmetDir[i].ipv6) - 1);
-        if (!helmetDirFileLookup(ip, g_helmetDir[i].alias, sizeof(g_helmetDir[i].alias), g_helmetDir[i].phone, sizeof(g_helmetDir[i].phone))) {
+        bool loaded = helmetUsingFile() ? helmetDirFileLookup(ip, g_helmetDir[i].alias, sizeof(g_helmetDir[i].alias), g_helmetDir[i].phone, sizeof(g_helmetDir[i].phone))
+                                         : helmetNvsLookup(ip, g_helmetDir[i].alias, sizeof(g_helmetDir[i].alias), g_helmetDir[i].phone, sizeof(g_helmetDir[i].phone));
+        if (!loaded) {
             Serial.printf("[HELMET] new src=%s not in file\n", ip);
         } else {
             Serial.printf("[HELMET] loaded src=%s alias=%s phone=%s\n", ip, g_helmetDir[i].alias, g_helmetDir[i].phone);
@@ -2532,7 +2596,29 @@ static bool helmetListHas(const String& body, const char* ip) {
 static esp_err_t webHelmetsHandler(httpd_req_t* req) {
     String body = "{\"max\":1024,\"count\":" + String(g_helmetDirStored) + ",\"items\":[";
     bool first = true;
-    if (ensureSpiffsMounted()) {
+    if (!ensureSpiffsMounted()) {
+        Preferences prefs;
+        if (prefs.begin("shdir", false)) {
+            int n = prefs.getInt("n", 0);
+            for (int i = 0; i < n && i < 64; i++) {
+                char key[16];
+                snprintf(key, sizeof(key), "r%u", (unsigned)i);
+                String line = prefs.getString(key, "");
+                int c1 = line.indexOf(',');
+                if (c1 < 1) continue;
+                String ip = line.substring(0, c1);
+                int c2 = line.indexOf(',', c1 + 1);
+                String alias = (c2 > c1) ? line.substring(c1 + 1, c2) : line.substring(c1 + 1);
+                String phone = (c2 > c1) ? line.substring(c2 + 1) : "";
+                if (!first) body += ",";
+                first = false;
+                body += "{\"ipv6\":\"" + jsonEscape(ip.c_str()) + "\"";
+                body += ",\"alias\":\"" + jsonEscape(alias.c_str()) + "\"";
+                body += ",\"phone\":\"" + jsonEscape(phone.c_str()) + "\"}";
+            }
+            prefs.end();
+        }
+    } else if (ensureSpiffsMounted()) {
         File f = SPIFFS.open("/helmet_dir.csv", "r");
         if (f) {
             while (f.available()) {
@@ -2601,7 +2687,8 @@ static esp_err_t webHelmetMetaHandler(httpd_req_t* req) {
     strncpy(g_selectedHelmet, src, sizeof(g_selectedHelmet) - 1);
     char savedAlias[48] = "";
     char savedPhone[16] = "";
-    bool kept = helmetDirFileLookup(src, savedAlias, sizeof(savedAlias), savedPhone, sizeof(savedPhone));
+    bool kept = helmetUsingFile() ? helmetDirFileLookup(src, savedAlias, sizeof(savedAlias), savedPhone, sizeof(savedPhone))
+                                 : helmetNvsLookup(src, savedAlias, sizeof(savedAlias), savedPhone, sizeof(savedPhone));
     Serial.printf("[HELMET] save queued src=%s alias=%s phone=%s file=%s/%s\n",
                   src, alias, phone, savedAlias, savedPhone);
     strncpy(g_verifySrc, src, sizeof(g_verifySrc) - 1);
@@ -5087,7 +5174,8 @@ void loop() {
         g_verifyAt = 0;
         char alias[48] = "";
         char phone[16] = "";
-        bool ok = helmetDirFileLookup(g_verifySrc, alias, sizeof(alias), phone, sizeof(phone));
+        bool ok = helmetUsingFile() ? helmetDirFileLookup(g_verifySrc, alias, sizeof(alias), phone, sizeof(phone))
+                                    : helmetNvsLookup(g_verifySrc, alias, sizeof(alias), phone, sizeof(phone));
         bool match = ok && strcmp(alias, g_verifyAlias) == 0 && strcmp(phone, g_verifyPhone) == 0;
         Serial.print("\033[31m");
         Serial.printf("[HELMET] verify %s src=%s saved=%s/%s read=%s/%s\n",
