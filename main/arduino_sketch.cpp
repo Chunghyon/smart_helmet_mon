@@ -327,6 +327,7 @@ static const char* WEB_INDEX_HTML = R"HTML(
         .line:last-child { border-bottom: 0; }
         .controls { position:absolute; left:10px; bottom:10px; display:flex; gap:8px; align-items:center; z-index:2; white-space:nowrap; max-width:calc(100% - 20px); overflow-x:auto; }
         .controls button, .controls select { height: 28px; font-size: 12px; }
+        #btnDataReset { background:#14532d; color:#fff; border:1px solid #86efac; font-weight:700; flex:0 0 auto; }
         .controls input[type="file"] { font-size: 11px; max-width: 220px; }
         .otaVer { font-size: 12px; font-weight: 700; min-width: 72px; }
         .otaFileInfo { font-size: 11px; max-width: 320px; overflow: hidden; text-overflow: ellipsis; }
@@ -447,6 +448,7 @@ static const char* WEB_INDEX_HTML = R"HTML(
             </div>
         </div>
         <div class="controls">
+            <button id="btnDataReset">초기화</button>
             <span id="fwVerLabel" class="otaFileInfo">파일 이름: -</span>
             <input id="otaFile" type="file" accept=".bin,application/octet-stream" />
             <span id="otaFileInfo" class="otaVer">버전: -</span>
@@ -456,8 +458,7 @@ static const char* WEB_INDEX_HTML = R"HTML(
             <button id="btnPacketToggle">Hide Window</button>
             <button id="btnCheckInterval">Check Interval</button>
             <button id="btnFireClear">Warning Clear</button>
-            <button id="btnDataReset">초기화</button>
-        </div>
+                    </div>
         <div id="otaModal" class="otaModalOverlay" aria-hidden="true">
             <div class="otaModal" role="dialog" aria-modal="true" aria-label="Firmware Update Progress">
                 <div class="otaModalTitle">Firmware Update</div>
@@ -1582,7 +1583,45 @@ static esp_err_t webFireClearHandler(httpd_req_t* req) {
     return sendOkJson(req, true, "warning cleared");
 }
 
+static bool sendRestartSensor(void) {
+    if (!g_wisunRuntimeReady) {
+        Serial.println("[RESET] wisun not ready");
+        return false;
+    }
+    if (!ensureATCommandMode()) {
+        Serial.println("[RESET] at mode failed");
+        return false;
+    }
+    bool any = false;
+    for (int i = 0; i < g_keyIpCount; i++) {
+        if (!g_keyIps[i].ipv6[0]) continue;
+        char cmd[96];
+        snprintf(cmd, sizeof(cmd), "udps %s RESTART_SENSOR\r\n", g_keyIps[i].ipv6);
+        WiSUNSerial.print(cmd);
+        WiSUNSerial.flush();
+        Serial.printf("[RESET] RESTART_SENSOR -> %s\n", g_keyIps[i].ipv6);
+        any = true;
+    }
+    if (MULTICAST_ADDRESS[0]) {
+        char addr[40];
+        const char* src = MULTICAST_ADDRESS;
+        if (*src == '<') src++;
+        strncpy(addr, src, sizeof(addr) - 1);
+        addr[sizeof(addr) - 1] = '\0';
+        char* gt = strchr(addr, '>');
+        if (gt) *gt = '\0';
+        char cmd[96];
+        snprintf(cmd, sizeof(cmd), "udps %s RESTART_SENSOR\r\n", addr);
+        WiSUNSerial.print(cmd);
+        WiSUNSerial.flush();
+        Serial.printf("[RESET] RESTART_SENSOR multicast %s\n", addr);
+        any = true;
+    }
+    return any;
+}
+
 static esp_err_t handleDataReset(httpd_req_t *req) {
+    bool sent = sendRestartSensor();
     g_cellStateCount = 0;
     g_nodeCount = 0;
     g_keyIpCount = 0;
@@ -1590,7 +1629,7 @@ static esp_err_t handleDataReset(httpd_req_t *req) {
     clearAllWarnings();
     notifyWebClients("", "", "data_reset", "", "", "");
     Serial.println("[WEB] data reset");
-    return sendOkJson(req, true, "data reset");
+    return sendOkJson(req, sent, sent ? "data reset, RESTART_SENSOR sent" : "data reset, send failed");
 }
 
 static esp_err_t webCheckIntervalHandler(httpd_req_t* req) {
