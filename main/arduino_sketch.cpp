@@ -2426,7 +2426,7 @@ static const char HELMET_HTML[] =
     "function cls(k,v){if(k=='fall'&&v=='yes')return 'bad';if(k=='pulse'&&(v=='rising'||v=='falling'))return 'warn';return 'ok';}"
     "function paint(d){var src=d.src||'-';document.getElementById('meta').textContent=src+(d.has_data?('  '+d.age_s+'s ago'):'');"
     "document.getElementById('grid').innerHTML=keys.map(k=>'<div class=\"card\"><div class=\"k\">'+k+'</div><div class=\"v '+cls(k,d[k]||'')+'\">'+(d[k]||'-')+'</div></div>').join('');}"
-    "function loadOne(){if(!selected){paint({});return;}fetch('/api/helmet?src='+encodeURIComponent(selected)).then(r=>r.json()).then(paint).catch(()=>{});}"
+    "function loadOne(){var u=selected?('/api/helmet?src='+encodeURIComponent(selected)):'/api/helmet';fetch(u).then(r=>r.json()).then(paint).catch(()=>{});}"
     "function fillMeta(){const cur=(window._items||[]).find(it=>it.ipv6==selected)||{};document.getElementById('alias').value=cur.alias||'';document.getElementById('phone').value=cur.phone||'';}"
     "function loadList(){fetch('/api/helmets').then(r=>r.json()).then(j=>{"
     "window._items=j.items||[];const sel=document.getElementById('sel');const prev=selected||sel.value;"
@@ -2475,10 +2475,29 @@ static void urlDecode(char* s) {
     *w = '\0';
 }
 
+static bool helmetListHas(const String& body, const char* ip) {
+    String needle = String("\"ipv6\":\"") + ip + "\"";
+    return body.indexOf(needle) >= 0;
+}
+
 static esp_err_t webHelmetsHandler(httpd_req_t* req) {
-    helmetDirSave();
-    String body = "{\"max\":1024,\"count\":" + String(g_helmetDirStored) + ",\"items\":[";
+    String body = "{\"max\":1024,\"count\":" + String(g_helmetDirCount) + ",\"items\":[";
     bool first = true;
+    if (g_helmetDir) {
+        for (int i = 0; i < g_helmetDirCount; i++) {
+            if (!g_helmetDir[i].ipv6[0]) continue;
+            if (!first) body += ",";
+            first = false;
+            body += "{\"ipv6\":\"" + jsonEscape(g_helmetDir[i].ipv6) + "\"";
+            body += ",\"alias\":\"" + jsonEscape(g_helmetDir[i].alias) + "\"";
+            body += ",\"phone\":\"" + jsonEscape(g_helmetDir[i].phone) + "\"}";
+        }
+    }
+    if (g_helmet.src[0] && !helmetListHas(body, g_helmet.src)) {
+        if (!first) body += ",";
+        first = false;
+        body += "{\"ipv6\":\"" + jsonEscape(g_helmet.src) + "\",\"alias\":\"\",\"phone\":\"\"}";
+    }
     if (ensureSpiffsMounted()) {
         File f = SPIFFS.open("/helmet_dir.csv", "r");
         if (f) {
@@ -2488,6 +2507,7 @@ static esp_err_t webHelmetsHandler(httpd_req_t* req) {
                 int c1 = line.indexOf(',');
                 if (c1 < 1) continue;
                 String ip = line.substring(0, c1);
+                if (helmetListHas(body, ip.c_str())) continue;
                 int c2 = line.indexOf(',', c1 + 1);
                 String alias = (c2 > c1) ? line.substring(c1 + 1, c2) : line.substring(c1 + 1);
                 String phone = (c2 > c1) ? line.substring(c2 + 1) : "";
@@ -2562,9 +2582,14 @@ static esp_err_t webHelmetApiHandler(httpd_req_t* req) {
         httpd_query_key_value(q, "src", src, sizeof(src));
         urlDecode(src);
     }
-    if (!src[0]) strncpy(src, g_selectedHelmet, sizeof(src) - 1);
+    if (!src[0]) strncpy(src, g_helmet.src[0] ? g_helmet.src : g_selectedHelmet, sizeof(src) - 1);
     if (src[0]) strncpy(g_selectedHelmet, src, sizeof(g_selectedHelmet) - 1);
     HelmetLive* live = helmetLiveBySrc(src);
+    if (!live && g_helmet.src[0] && strcmp(src, g_helmet.src) == 0) {
+        int li = helmetLiveFind(g_helmet.src);
+        live = helmetLiveBySrc(src);
+        (void)li;
+    }
     unsigned long age = (live && live->updatedMs) ? (millis() - live->updatedMs) / 1000UL : 0;
     String body = "{";
     body += "\"src\":\"" + jsonEscape(src) + "\"";
