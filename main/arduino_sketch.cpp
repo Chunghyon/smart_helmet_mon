@@ -2118,7 +2118,7 @@ static esp_err_t webPacketStreamHandler(httpd_req_t* req) {
 
 
 #define HELMET_DIR_MAX 1024
-#define HELMET_LIVE_MAX 64
+#define HELMET_RAM_MAX 32
 #define HELMET_CONNECTED_MS 20000UL
 
 struct HelmetId {
@@ -2143,15 +2143,117 @@ struct HelmetLive {
 };
 static HelmetId* g_helmetDir = nullptr;
 static int g_helmetDirCount = 0;
-static HelmetLive g_helmetLive[HELMET_LIVE_MAX];
+static int g_helmetDirStored = 0;
+static HelmetLive* g_helmetLive = nullptr;
 static int g_helmetLiveCount = 0;
 static char g_selectedHelmet[40];
 static bool g_helmetDirDirty = false;
 
-static void helmetDirEnsure(void) {
-    if (g_helmetDir) return;
-    g_helmetDir = (HelmetId*)calloc(HELMET_DIR_MAX, sizeof(HelmetId));
-    if (!g_helmetDir) Serial.println("[HELMET] dir alloc failed");
+static int helmetDirFileCount(void) {
+    if (!ensureSpiffsMounted()) return 0;
+    File f = SPIFFS.open("/helmet_dir.csv", "r");
+    if (!f) return 0;
+    int n = 0;
+    while (f.available() && n < HELMET_DIR_MAX) {
+        String line = f.readStringUntil('\n');
+        line.trim();
+        if (line.length()) n++;
+    }
+    f.close();
+    return n;
+}
+
+static bool helmetDirFileLookup(const char* ip, char* alias, size_t aliasN, char* phone, size_t phoneN) {
+    if (alias && aliasN) alias[0] = '\0';
+    if (phone && phoneN) phone[0] = '\0';
+    if (!ip || !ensureSpiffsMounted()) return false;
+    File f = SPIFFS.open("/helmet_dir.csv", "r");
+    if (!f) return false;
+    bool found = false;
+    while (f.available()) {
+        String line = f.readStringUntil('\n');
+        line.trim();
+        int c1 = line.indexOf(',');
+        if (c1 < 1) continue;
+        if (line.substring(0, c1) != ip) continue;
+        int c2 = line.indexOf(',', c1 + 1);
+        String a = (c2 > c1) ? line.substring(c1 + 1, c2) : line.substring(c1 + 1);
+        String ph = (c2 > c1) ? line.substring(c2 + 1) : "";
+        if (alias && aliasN) strncpy(alias, a.c_str(), aliasN - 1);
+        if (phone && phoneN) strncpy(phone, ph.c_str(), phoneN - 1);
+        found = true;
+        break;
+    }
+    f.close();
+    return found;
+}
+
+static void helmetDirFileUpsert(const char* ip, const char* alias, const char* phone) {
+    if (!ip || !ip[0] || !ensureSpiffsMounted()) return;
+    File in = SPIFFS.open("/helmet_dir.csv", "r");
+    File out = SPIFFS.open("/helmet_dir.tmp", "w");
+    if (!out) {
+        if (in) in.close();
+        return;
+    }
+    bool replaced = false;
+    int n = 0;
+    if (in) {
+        while (in.available() && n < HELMET_DIR_MAX) {
+            String line = in.readStringUntil('\n');
+            line.trim();
+            if (!line.length()) continue;
+            int c1 = line.indexOf(',');
+            if (c1 > 0 && line.substring(0, c1) == ip) {
+                out.printf("%s,%s,%s\n", ip, alias ? alias : "", phone ? phone : "");
+                replaced = true;
+            } else {
+                out.println(line);
+            }
+            n++;
+        }
+        in.close();
+    }
+    if (!replaced && n < HELMET_DIR_MAX) {
+        out.printf("%s,%s,%s\n", ip, alias ? alias : "", phone ? phone : "");
+        n++;
+    }
+    out.close();
+    SPIFFS.remove("/helmet_dir.csv");
+    SPIFFS.rename("/helmet_dir.tmp", "/helmet_dir.csv");
+    g_helmetDirStored = n;
+}
+
+static void helmetDirFileDelete(const char* ip) {
+    if (!ip || !ip[0] || !ensureSpiffsMounted()) return;
+    File in = SPIFFS.open("/helmet_dir.csv", "r");
+    File out = SPIFFS.open("/helmet_dir.tmp", "w");
+    if (!out) {
+        if (in) in.close();
+        return;
+    }
+    int n = 0;
+    if (in) {
+        while (in.available()) {
+            String line = in.readStringUntil('\n');
+            line.trim();
+            if (!line.length()) continue;
+            int c1 = line.indexOf(',');
+            if (c1 > 0 && line.substring(0, c1) == ip) continue;
+            out.println(line);
+            n++;
+        }
+        in.close();
+    }
+    out.close();
+    SPIFFS.remove("/helmet_dir.csv");
+    SPIFFS.rename("/helmet_dir.tmp", "/helmet_dir.csv");
+    g_helmetDirStored = n;
+}
+
+static void helmetRamEnsure(void) {
+    if (!g_helmetDir) g_helmetDir = (HelmetId*)calloc(HELMET_RAM_MAX, sizeof(HelmetId));
+    if (!g_helmetLive) g_helmetLive = (HelmetLive*)calloc(HELMET_RAM_MAX, sizeof(HelmetLive));
 }
 
 static int helmetDirFind(const char* ip) {
@@ -2163,52 +2265,32 @@ static int helmetDirFind(const char* ip) {
 }
 
 static void helmetDirSave(void) {
-    if (!g_helmetDir || !g_helmetDirDirty) return;
-    if (!ensureSpiffsMounted()) return;
-    File f = SPIFFS.open("/helmet_dir.csv", "w");
-    if (!f) return;
+    if (!g_helmetDirDirty) return;
     for (int i = 0; i < g_helmetDirCount; i++) {
-        f.printf("%s,%s,%s\n", g_helmetDir[i].ipv6, g_helmetDir[i].alias, g_helmetDir[i].phone);
+        helmetDirFileUpsert(g_helmetDir[i].ipv6, g_helmetDir[i].alias, g_helmetDir[i].phone);
     }
-    f.close();
     g_helmetDirDirty = false;
-    Serial.printf("[HELMET] saved %d\n", g_helmetDirCount);
 }
 
 static void helmetDirLoad(void) {
-    helmetDirEnsure();
-    if (!g_helmetDir || !ensureSpiffsMounted()) return;
-    File f = SPIFFS.open("/helmet_dir.csv", "r");
-    if (!f) return;
-    while (f.available() && g_helmetDirCount < HELMET_DIR_MAX) {
-        String line = f.readStringUntil('\n');
-        line.trim();
-        if (!line.length()) continue;
-        int c1 = line.indexOf(',');
-        int c2 = line.indexOf(',', c1 + 1);
-        if (c1 < 1) continue;
-        String ip = line.substring(0, c1);
-        String alias = (c2 > c1) ? line.substring(c1 + 1, c2) : line.substring(c1 + 1);
-        String phone = (c2 > c1) ? line.substring(c2 + 1) : "";
-        HelmetId* s = &g_helmetDir[g_helmetDirCount++];
-        strncpy(s->ipv6, ip.c_str(), sizeof(s->ipv6) - 1);
-        strncpy(s->alias, alias.c_str(), sizeof(s->alias) - 1);
-        strncpy(s->phone, phone.c_str(), sizeof(s->phone) - 1);
-    }
-    f.close();
-    Serial.printf("[HELMET] loaded %d\n", g_helmetDirCount);
+    g_helmetDirStored = helmetDirFileCount();
+    Serial.printf("[HELMET] stored %d, ram cap %d\n", g_helmetDirStored, HELMET_RAM_MAX);
 }
 
 static int helmetDirNote(const char* ip) {
     if (!ip || !ip[0]) return -1;
-    helmetDirEnsure();
+    helmetRamEnsure();
     if (!g_helmetDir) return -1;
     int i = helmetDirFind(ip);
     if (i < 0) {
-        if (g_helmetDirCount >= HELMET_DIR_MAX) return -1;
+        if (g_helmetDirCount >= HELMET_RAM_MAX) return -1;
         i = g_helmetDirCount++;
+        memset(&g_helmetDir[i], 0, sizeof(g_helmetDir[i]));
         strncpy(g_helmetDir[i].ipv6, ip, sizeof(g_helmetDir[i].ipv6) - 1);
-        g_helmetDirDirty = true;
+        helmetDirFileLookup(ip, g_helmetDir[i].alias, sizeof(g_helmetDir[i].alias), g_helmetDir[i].phone, sizeof(g_helmetDir[i].phone));
+        if (!g_helmetDir[i].alias[0] && g_helmetDirStored < HELMET_DIR_MAX) {
+            helmetDirFileUpsert(ip, "", "");
+        }
     }
     g_helmetDir[i].lastSeenMs = millis();
     if (!g_selectedHelmet[0]) strncpy(g_selectedHelmet, ip, sizeof(g_selectedHelmet) - 1);
@@ -2217,10 +2299,12 @@ static int helmetDirNote(const char* ip) {
 }
 
 static int helmetLiveFind(const char* ip) {
+    helmetRamEnsure();
+    if (!g_helmetLive) return -1;
     for (int i = 0; i < g_helmetLiveCount; i++) {
         if (strcmp(g_helmetLive[i].ipv6, ip) == 0) return i;
     }
-    if (g_helmetLiveCount >= HELMET_LIVE_MAX) return 0;
+    if (g_helmetLiveCount >= HELMET_RAM_MAX) return 0;
     int i = g_helmetLiveCount++;
     memset(&g_helmetLive[i], 0, sizeof(g_helmetLive[i]));
     strncpy(g_helmetLive[i].ipv6, ip, sizeof(g_helmetLive[i].ipv6) - 1);
@@ -2355,7 +2439,7 @@ static const char HELMET_HTML[] =
     "loadList();setInterval(loadList,2000);</script></body></html>";
 
 static HelmetLive* helmetLiveBySrc(const char* src) {
-    if (!src || !src[0]) return nullptr;
+    if (!g_helmetLive || !src || !src[0]) return nullptr;
     for (int i = 0; i < g_helmetLiveCount; i++) {
         if (strcmp(g_helmetLive[i].ipv6, src) == 0) return &g_helmetLive[i];
     }
@@ -2367,8 +2451,7 @@ static esp_err_t webHelmetsHandler(httpd_req_t* req) {
     String body = "{\"max\":1024,\"count\":" + String(g_helmetDirCount) + ",\"items\":[";
     unsigned long now = millis();
     bool first = true;
-    if (g_helmetDir) {
-        for (int i = 0; i < g_helmetDirCount; i++) {
+    if (g_helmetDir) for (int i = 0; i < g_helmetDirCount; i++) {
             if (!g_helmetDir[i].lastSeenMs) continue;
             if (now - g_helmetDir[i].lastSeenMs > HELMET_CONNECTED_MS) continue;
             if (!first) body += ",";
@@ -2377,7 +2460,6 @@ static esp_err_t webHelmetsHandler(httpd_req_t* req) {
             body += ",\"alias\":\"" + jsonEscape(g_helmetDir[i].alias) + "\"";
             body += ",\"phone\":\"" + jsonEscape(g_helmetDir[i].phone) + "\"}";
         }
-    }
     body += "]}";
     return sendWebResponse(req, "application/json", body.c_str(), body.length(), "helmets");
 }
@@ -2412,12 +2494,15 @@ static esp_err_t webHelmetDeleteHandler(httpd_req_t* req) {
     }
     int i = helmetDirFind(src);
     if (i < 0) return sendOkJson(req, false, "unknown helmet");
+    helmetDirFileDelete(src);
     for (int j = i; j + 1 < g_helmetDirCount; j++) g_helmetDir[j] = g_helmetDir[j + 1];
     g_helmetDirCount--;
     memset(&g_helmetDir[g_helmetDirCount], 0, sizeof(g_helmetDir[0]));
-    for (int j = 0; j < g_helmetLiveCount; j++) {
-        if (strcmp(g_helmetLive[j].ipv6, src) == 0) {
-            memset(&g_helmetLive[j], 0, sizeof(g_helmetLive[j]));
+    if (g_helmetLive) {
+        for (int j = 0; j < g_helmetLiveCount; j++) {
+            if (strcmp(g_helmetLive[j].ipv6, src) == 0) {
+                memset(&g_helmetLive[j], 0, sizeof(g_helmetLive[j]));
+            }
         }
     }
     g_helmetDirDirty = true;
