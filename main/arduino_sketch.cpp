@@ -1166,11 +1166,11 @@ static String jsonEscape(const char* s) {
         String out;
         if (!s) return "";
         while (*s) {
-                char c = *s++;
-                if (c == '"' || c == '\\') { out += '\\'; out += c; }
+                unsigned char c = (unsigned char)*s++;
+                if (c == '"' || c == '\\') { out += '\\'; out += (char)c; }
                 else if (c == '\n') out += "\\n";
                 else if (c == '\r') out += "\\r";
-                else out += c;
+                else out += (char)c;
         }
         return out;
 }
@@ -2126,7 +2126,7 @@ static esp_err_t webPacketStreamHandler(httpd_req_t* req) {
 
 struct HelmetId {
     char ipv6[40];
-    char alias[24];
+    char alias[48];
     char phone[16];
     uint32_t lastSeenMs;
 };
@@ -2221,10 +2221,15 @@ static void helmetDirFileUpsert(const char* ip, const char* alias, const char* p
         out.printf("%s,%s,%s\n", ip, alias ? alias : "", phone ? phone : "");
         n++;
     }
+    out.flush();
     out.close();
     SPIFFS.remove("/helmet_dir.csv");
-    SPIFFS.rename("/helmet_dir.tmp", "/helmet_dir.csv");
+    if (!SPIFFS.rename("/helmet_dir.tmp", "/helmet_dir.csv")) {
+        Serial.println("[HELMET] file rename failed");
+        return;
+    }
     g_helmetDirStored = n;
+    Serial.printf("[HELMET] file stored %d\n", n);
 }
 
 static void helmetDirFileDelete(const char* ip) {
@@ -2276,8 +2281,25 @@ static void helmetDirSave(void) {
 }
 
 static void helmetDirLoad(void) {
-    g_helmetDirStored = helmetDirFileCount();
-    Serial.printf("[HELMET] stored %d, ram cap %d\n", g_helmetDirStored, HELMET_RAM_MAX);
+    g_helmetDirStored = 0;
+    if (!ensureSpiffsMounted()) {
+        Serial.println("[HELMET] spiffs not mounted");
+        return;
+    }
+    File f = SPIFFS.open("/helmet_dir.csv", "r");
+    if (!f) {
+        Serial.println("[HELMET] no saved file");
+        return;
+    }
+    while (f.available()) {
+        String line = f.readStringUntil('\n');
+        line.trim();
+        if (!line.length()) continue;
+        g_helmetDirStored++;
+        Serial.printf("[HELMET] boot %s\n", line.c_str());
+    }
+    f.close();
+    Serial.printf("[HELMET] stored %d\n", g_helmetDirStored);
 }
 
 static int helmetDirNote(const char* ip) {
@@ -2297,7 +2319,7 @@ static int helmetDirNote(const char* ip) {
             Serial.printf("[HELMET] loaded src=%s alias=%s phone=%s\n", ip, g_helmetDir[i].alias, g_helmetDir[i].phone);
         }
     } else {
-        char alias[24] = "";
+        char alias[48] = "";
         char phone[16] = "";
         if (helmetDirFileLookup(ip, alias, sizeof(alias), phone, sizeof(phone))) {
             if (alias[0]) strncpy(g_helmetDir[i].alias, alias, sizeof(g_helmetDir[i].alias) - 1);
@@ -2537,7 +2559,7 @@ static esp_err_t webHelmetsHandler(httpd_req_t* req) {
 static esp_err_t webHelmetMetaHandler(httpd_req_t* req) {
     char q[160] = "";
     char src[48] = "";
-    char alias[24] = "";
+    char alias[48] = "";
     char phone[16] = "";
     if (httpd_req_get_url_query_str(req, q, sizeof(q)) == ESP_OK) {
         httpd_query_key_value(q, "src", src, sizeof(src));
@@ -2561,8 +2583,12 @@ static esp_err_t webHelmetMetaHandler(httpd_req_t* req) {
     g_helmetDirDirty = true;
     helmetDirSave();
     strncpy(g_selectedHelmet, src, sizeof(g_selectedHelmet) - 1);
-    Serial.printf("[HELMET] save ok src=%s alias=%s phone=%s\n", src, alias, phone);
-    return sendOkJson(req, true, "saved");
+    char savedAlias[48] = "";
+    char savedPhone[16] = "";
+    bool kept = helmetDirFileLookup(src, savedAlias, sizeof(savedAlias), savedPhone, sizeof(savedPhone));
+    Serial.printf("[HELMET] save %s src=%s alias=%s phone=%s file=%s/%s\n",
+                  kept ? "ok" : "fail", src, alias, phone, savedAlias, savedPhone);
+    return sendOkJson(req, kept, kept ? "saved" : "file write failed");
 }
 
 static esp_err_t webHelmetDeleteHandler(httpd_req_t* req) {
