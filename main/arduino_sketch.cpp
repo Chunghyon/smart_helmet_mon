@@ -2202,44 +2202,50 @@ static void helmetDirDumpRed(const char* tag) {
 }
 
 static void helmetDirFileUpsert(const char* ip, const char* alias, const char* phone) {
-    if (!ip || !ip[0] || !ensureSpiffsMounted()) return;
-    File in = SPIFFS.open("/helmet_dir.csv", "r");
-    File out = SPIFFS.open("/helmet_dir.tmp", "w");
-    if (!out) {
-        if (in) in.close();
+    if (!ip || !ip[0]) return;
+    if (!ensureSpiffsMounted()) {
+        Serial.println("[HELMET] file skip: spiffs not mounted");
         return;
     }
-    bool replaced = false;
-    int n = 0;
+    String body;
+    File in = SPIFFS.open("/helmet_dir.csv", "r");
     if (in) {
-        while (in.available() && n < HELMET_DIR_MAX) {
-            String line = in.readStringUntil('\n');
-            line.trim();
-            if (!line.length()) continue;
-            int c1 = line.indexOf(',');
-            if (c1 > 0 && line.substring(0, c1) == ip) {
-                out.printf("%s,%s,%s\n", ip, alias ? alias : "", phone ? phone : "");
-                replaced = true;
-            } else {
-                out.println(line);
-            }
-            n++;
-        }
+        body = in.readString();
         in.close();
     }
-    if (!replaced && n < HELMET_DIR_MAX) {
-        out.printf("%s,%s,%s\n", ip, alias ? alias : "", phone ? phone : "");
+    String next;
+    bool replaced = false;
+    int n = 0;
+    int from = 0;
+    while (from < (int)body.length() && n < HELMET_DIR_MAX) {
+        int nl = body.indexOf('\n', from);
+        String line = body.substring(from, nl < 0 ? body.length() : nl);
+        from = nl < 0 ? body.length() : nl + 1;
+        line.trim();
+        if (!line.length()) continue;
+        int c1 = line.indexOf(',');
+        if (c1 > 0 && line.substring(0, c1) == ip) {
+            next += String(ip) + "," + (alias ? alias : "") + "," + (phone ? phone : "") + "\n";
+            replaced = true;
+        } else {
+            next += line + "\n";
+        }
         n++;
     }
-    out.flush();
-    out.close();
-    SPIFFS.remove("/helmet_dir.csv");
-    if (!SPIFFS.rename("/helmet_dir.tmp", "/helmet_dir.csv")) {
-        Serial.println("[HELMET] file rename failed");
+    if (!replaced && n < HELMET_DIR_MAX) {
+        next += String(ip) + "," + (alias ? alias : "") + "," + (phone ? phone : "") + "\n";
+        n++;
+    }
+    File out = SPIFFS.open("/helmet_dir.csv", "w");
+    if (!out) {
+        Serial.println("[HELMET] file open for write failed");
         return;
     }
+    size_t wrote = out.write((const uint8_t*)next.c_str(), next.length());
+    out.flush();
+    out.close();
     g_helmetDirStored = n;
-    Serial.printf("[HELMET] file stored %d\n", n);
+    Serial.printf("[HELMET] file stored %d bytes=%u/%u\n", n, (unsigned)wrote, (unsigned)next.length());
 }
 
 static void helmetDirFileDelete(const char* ip) {
@@ -2323,8 +2329,7 @@ static int helmetDirNote(const char* ip) {
         memset(&g_helmetDir[i], 0, sizeof(g_helmetDir[i]));
         strncpy(g_helmetDir[i].ipv6, ip, sizeof(g_helmetDir[i].ipv6) - 1);
         if (!helmetDirFileLookup(ip, g_helmetDir[i].alias, sizeof(g_helmetDir[i].alias), g_helmetDir[i].phone, sizeof(g_helmetDir[i].phone))) {
-            helmetDirFileUpsert(ip, "", "");
-            Serial.printf("[HELMET] new src=%s alias empty\n", ip);
+            Serial.printf("[HELMET] new src=%s not in file\n", ip);
         } else {
             Serial.printf("[HELMET] loaded src=%s alias=%s phone=%s\n", ip, g_helmetDir[i].alias, g_helmetDir[i].phone);
         }
