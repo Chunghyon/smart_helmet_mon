@@ -1583,41 +1583,50 @@ static esp_err_t webFireClearHandler(httpd_req_t* req) {
     return sendOkJson(req, true, "warning cleared");
 }
 
+static char g_restartReply[96];
+static char g_lastHelmetDst[40];
+
+static void sendRestartTo(const char* dst) {
+    if (!dst || !dst[0]) return;
+    char addr[48];
+    const char* src = dst;
+    if (*src == '<') src++;
+    strncpy(addr, src, sizeof(addr) - 1);
+    addr[sizeof(addr) - 1] = '\0';
+    char* gt = strchr(addr, '>');
+    if (gt) *gt = '\0';
+    char cmd[96];
+    snprintf(cmd, sizeof(cmd), "udps %s RESTART_SENSOR\r\n", addr);
+    String reply = sendCommand(cmd);
+    strncpy(g_restartReply, reply.c_str(), sizeof(g_restartReply) - 1);
+    g_restartReply[sizeof(g_restartReply) - 1] = '\0';
+    Serial.printf("[RESET] dst=%s reply=%s\n", addr, g_restartReply);
+}
+
 static bool sendRestartSensor(void) {
-    if (!g_wisunRuntimeReady) {
-        Serial.println("[RESET] wisun not ready");
-        return false;
-    }
+    g_restartReply[0] = '\0';
     if (!ensureATCommandMode()) {
         Serial.println("[RESET] at mode failed");
+        strncpy(g_restartReply, "at mode failed", sizeof(g_restartReply) - 1);
         return false;
     }
     bool any = false;
+    if (g_lastHelmetDst[0]) {
+        sendRestartTo(g_lastHelmetDst);
+        any = true;
+    }
     for (int i = 0; i < g_keyIpCount; i++) {
         if (!g_keyIps[i].ipv6[0]) continue;
-        char cmd[96];
-        snprintf(cmd, sizeof(cmd), "udps %s RESTART_SENSOR\r\n", g_keyIps[i].ipv6);
-        WiSUNSerial.print(cmd);
-        WiSUNSerial.flush();
-        Serial.printf("[RESET] RESTART_SENSOR -> %s\n", g_keyIps[i].ipv6);
+        if (g_lastHelmetDst[0] && strcmp(g_keyIps[i].ipv6, g_lastHelmetDst) == 0) continue;
+        sendRestartTo(g_keyIps[i].ipv6);
         any = true;
     }
     if (MULTICAST_ADDRESS[0]) {
-        char addr[40];
-        const char* src = MULTICAST_ADDRESS;
-        if (*src == '<') src++;
-        strncpy(addr, src, sizeof(addr) - 1);
-        addr[sizeof(addr) - 1] = '\0';
-        char* gt = strchr(addr, '>');
-        if (gt) *gt = '\0';
-        char cmd[96];
-        snprintf(cmd, sizeof(cmd), "udps %s RESTART_SENSOR\r\n", addr);
-        WiSUNSerial.print(cmd);
-        WiSUNSerial.flush();
-        Serial.printf("[RESET] RESTART_SENSOR multicast %s\n", addr);
+        sendRestartTo(MULTICAST_ADDRESS);
         any = true;
     }
-    return any;
+    if (!any) strncpy(g_restartReply, "no destination", sizeof(g_restartReply) - 1);
+    return any && strstr(g_restartReply, "send fail") == NULL && strstr(g_restartReply, "failed") == NULL;
 }
 
 static esp_err_t handleDataReset(httpd_req_t *req) {
@@ -1629,7 +1638,7 @@ static esp_err_t handleDataReset(httpd_req_t *req) {
     clearAllWarnings();
     notifyWebClients("", "", "data_reset", "", "", "");
     Serial.println("[WEB] data reset");
-    return sendOkJson(req, sent, sent ? "data reset, RESTART_SENSOR sent" : "data reset, send failed");
+    return sendOkJson(req, sent, g_restartReply[0] ? g_restartReply : "no reply");
 }
 
 static esp_err_t webCheckIntervalHandler(httpd_req_t* req) {
@@ -2155,6 +2164,7 @@ static void ingestHelmetText(const char* src, const char* payload) {
             int n = (int)(end - ip);
             strncpy(g_helmet.src, ip, n);
             g_helmet.src[n] = '\0';
+            strncpy(g_lastHelmetDst, g_helmet.src, sizeof(g_lastHelmetDst) - 1);
             body = end + 1;
             if (*body == ':') body++;
         }
@@ -2190,7 +2200,7 @@ static const char HELMET_HTML[] =
     "<div class='meta' id='meta'>waiting</div></div>"
     "<button id='btnDataReset' type='button'>초기화</button></header><div class='grid' id='grid'></div>"
     "<script>"
-    "document.getElementById('btnDataReset').onclick=function(){fetch('/api/data_reset').then(function(r){return r.json();}).then(function(){paint({});document.getElementById('meta').textContent='RESTART_SENSOR sent';}).catch(function(){document.getElementById('meta').textContent='reset failed';});};"
+    "document.getElementById('btnDataReset').onclick=function(){fetch('/api/data_reset').then(function(r){return r.json();}).then(function(j){document.getElementById('meta').textContent=(j&&j.msg)?j.msg:'no reply';}).catch(function(){document.getElementById('meta').textContent='reset failed';});};"
     "const keys=['motion','fall','pulse','body','amb','rh','voc','co','nh3','no2'];"
     "function cls(k,v){if(k=='fall'&&v=='yes')return 'bad';if(k=='pulse'&&(v=='rising'||v=='falling'))return 'warn';return 'ok';}"
     "function paint(d){document.getElementById('meta').textContent=(d.src||'-')+'  '+(d.age_s==null?'':d.age_s+'s ago');"
