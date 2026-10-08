@@ -2476,7 +2476,7 @@ static const char HELMET_HTML[] =
     ".limits label{font-size:12px;color:#9ab}"
     ".limits input{min-width:72px;width:84px}"
     "</style></head><body><header><h1>Smart Safety Monitor by JJSYSTEM</h1>"
-    "<div class='row'><select id='sel'></select>"
+    "<div class='row' id='routerBox'><select id='sel'></select>"
     "<input id='alias' placeholder='작업자'>"
     "<input id='phone' placeholder='휴대폰'>"
     "<button id='save' type='button'>저장</button>"
@@ -2484,7 +2484,7 @@ static const char HELMET_HTML[] =
     "<button id='btnDataReset' type='button'>초기화</button></div>"
     "<div class='meta' id='meta'>waiting</div></header>"
     "<div class='grid' id='grid'></div>"
-    "<section class='limits'><h2>정상 범위</h2><div class='row'>"
+    "<section class='limits' id='limBox'><h2>정상 범위</h2><div class='row'>"
     "<label>체온<input id='bodyMin' type='number' step='0.1'>~<input id='bodyMax' type='number' step='0.1'></label>"
     "<label>주변온도<input id='ambMin' type='number' step='0.1'>~<input id='ambMax' type='number' step='0.1'></label>"
     "<label>습도<input id='rhMin' type='number' step='0.1'>~<input id='rhMax' type='number' step='0.1'></label>"
@@ -2529,10 +2529,10 @@ static const char HELMET_HTML[] =
     "paint({});fetch('/api/data_reset?src='+encodeURIComponent(selected)).then(r=>r.json()).then(j=>{document.getElementById('meta').textContent=(j&&j.msg)?j.msg:'no reply';}).catch(()=>{document.getElementById('meta').textContent='reset failed';});};"
     "document.getElementById('saveLim').onclick=saveLim;loadLim();"
     "if(location.port==='8888'){document.getElementById('offBox').style.display='block';document.querySelector('h1').textContent='Smart Safety Monitor 관리자';"
+    "document.getElementById('routerBox').style.display='none';document.getElementById('meta').style.display='none';document.getElementById('grid').style.display='none';document.getElementById('limBox').style.display='none';"
     "function loadOff(){fetch('/api/offsets').then(r=>r.json()).then(j=>{bodyOff.value=j.body;ambOff.value=j.amb;rhOff.value=j.rh;vocOff.value=j.voc;coOff.value=j.co;nh3Off.value=j.nh3;no2Off.value=j.no2;}).catch(()=>{});}"
-    "function saveOff(){var q='body='+encodeURIComponent(bodyOff.value)+'&amb='+encodeURIComponent(ambOff.value)+'&rh='+encodeURIComponent(rhOff.value)+'&voc='+encodeURIComponent(vocOff.value)+'&co='+encodeURIComponent(coOff.value)+'&nh3='+encodeURIComponent(nh3Off.value)+'&no2='+encodeURIComponent(no2Off.value);fetch('/api/offsets?'+q).then(r=>r.json()).then(j=>{document.getElementById('meta').textContent=(j&&j.msg)?j.msg:'offset saved';loadOne();}).catch(()=>{document.getElementById('meta').textContent='offset save failed';});}"
-    "document.getElementById('saveOff').onclick=saveOff;loadOff();}"
-    "loadList();setInterval(loadList,2000);</script></body></html>";
+    "function saveOff(){var q='body='+encodeURIComponent(bodyOff.value)+'&amb='+encodeURIComponent(ambOff.value)+'&rh='+encodeURIComponent(rhOff.value)+'&voc='+encodeURIComponent(vocOff.value)+'&co='+encodeURIComponent(coOff.value)+'&nh3='+encodeURIComponent(nh3Off.value)+'&no2='+encodeURIComponent(no2Off.value);fetch('/api/offsets?'+q).then(r=>r.json()).then(j=>{document.querySelector('h1').textContent='offset 저장됨';loadOff();}).catch(()=>{document.querySelector('h1').textContent='offset 저장 실패';});}"
+    "document.getElementById('saveOff').onclick=saveOff;loadOff();}else{loadList();setInterval(loadList,2000);}</script></body></html>";
 
 
 struct HelmetLimits {
@@ -2866,13 +2866,20 @@ static esp_err_t webHelmetApiHandler(httpd_req_t* req) {
     body += ",\"motion\":\"" + jsonEscape(live ? live->motion : "") + "\"";
     body += ",\"fall\":\"" + jsonEscape(live ? live->fall : "") + "\"";
     body += ",\"pulse\":\"" + jsonEscape(live ? live->pulse : "") + "\"";
-    body += ",\"body\":\"" + jsonEscape(helmetWithOffset(live ? live->body : "", g_offsets.body, 2)) + "\"";
-    body += ",\"amb\":\"" + jsonEscape(helmetWithOffset(live ? live->amb : "", g_offsets.amb, 2)) + "\"";
-    body += ",\"rh\":\"" + jsonEscape(helmetWithOffset(live ? live->rh : "", g_offsets.rh, 2)) + "\"";
-    body += ",\"voc\":\"" + jsonEscape(helmetWithOffset(live ? live->voc : "", g_offsets.voc, 2)) + "\"";
-    body += ",\"co\":\"" + jsonEscape(helmetWithOffset(live ? live->co : "", g_offsets.co, 2)) + "\"";
-    body += ",\"nh3\":\"" + jsonEscape(helmetWithOffset(live ? live->nh3 : "", g_offsets.nh3, 2)) + "\"";
-    body += ",\"no2\":\"" + jsonEscape(helmetWithOffset(live ? live->no2 : "", g_offsets.no2, 3)) + "\"";
+    String bodyShown = helmetWithOffset(live ? live->body : "", g_offsets.body, 2);
+    String ambShown = helmetWithOffset(live ? live->amb : "", g_offsets.amb, 2);
+    String rhShown = helmetWithOffset(live ? live->rh : "", g_offsets.rh, 2);
+    String vocShown = helmetWithOffset(live ? live->voc : "", g_offsets.voc, 2);
+    String coShown = helmetWithOffset(live ? live->co : "", g_offsets.co, 2);
+    String nh3Shown = helmetWithOffset(live ? live->nh3 : "", g_offsets.nh3, 2);
+    String no2Shown = helmetWithOffset(live ? live->no2 : "", g_offsets.no2, 3);
+    body += ",\"body\":\"" + jsonEscape(bodyShown.c_str()) + "\"";
+    body += ",\"amb\":\"" + jsonEscape(ambShown.c_str()) + "\"";
+    body += ",\"rh\":\"" + jsonEscape(rhShown.c_str()) + "\"";
+    body += ",\"voc\":\"" + jsonEscape(vocShown.c_str()) + "\"";
+    body += ",\"co\":\"" + jsonEscape(coShown.c_str()) + "\"";
+    body += ",\"nh3\":\"" + jsonEscape(nh3Shown.c_str()) + "\"";
+    body += ",\"no2\":\"" + jsonEscape(no2Shown.c_str()) + "\"";
     body += ",\"age_s\":" + String(live ? age : 0);
     body += ",\"has_data\":" + String(live && live->updatedMs ? "true" : "false");
     body += "}";
