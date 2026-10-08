@@ -136,6 +136,7 @@ static void onWiFiEvent(WiFiEvent_t event, WiFiEventInfo_t info) {
 //  Web UI + WebSocket monitor
 // ============================================================================
 static httpd_handle_t g_httpServer = nullptr;
+static httpd_handle_t g_httpAdmin = nullptr;
 static unsigned long g_nextWebRetryMs = 0;
 static unsigned long g_lastWebHealthCheckMs = 0;
 static unsigned long g_webClientPressureSinceMs = 0;
@@ -2492,6 +2493,15 @@ static const char HELMET_HTML[] =
     "<label>NH3최대<input id='nh3Max' type='number' step='0.1'></label>"
     "<label>NO2최대<input id='no2Max' type='number' step='0.01'></label>"
     "<button id='saveLim' type='button'>범위저장</button></div></section>"
+    "<section class='limits' id='offBox' style='display:none'><h2>관리자 offset (NVS)</h2><div class='row'>"
+    "<label>체온<input id='bodyOff' type='number' step='0.01'></label>"
+    "<label>주변온도<input id='ambOff' type='number' step='0.01'></label>"
+    "<label>습도<input id='rhOff' type='number' step='0.01'></label>"
+    "<label>VOC<input id='vocOff' type='number' step='0.01'></label>"
+    "<label>CO<input id='coOff' type='number' step='0.01'></label>"
+    "<label>NH3<input id='nh3Off' type='number' step='0.01'></label>"
+    "<label>NO2<input id='no2Off' type='number' step='0.001'></label>"
+    "<button id='saveOff' type='button'>offset저장</button></div></section>"
     "<script>"
     "const keys=['fall','motion','pulse','body','amb','rh','voc','co','nh3','no2'];""const names={motion:'활동감지',fall:'낙상의심',pulse:'생체미세움직임',body:'체온',amb:'주변온도',rh:'습도',voc:'VOC',co:'일산화탄소(CO)',nh3:'암모니아(NH3)',no2:'이산화질소(NO2)'};"
     "let selected='';"
@@ -2517,7 +2527,12 @@ static const char HELMET_HTML[] =
     "document.getElementById('del').onclick=function(){if(!selected)return;fetch('/api/helmet_delete?src='+encodeURIComponent(selected)).then(()=>{selected='';loadList();});};"
     "document.getElementById('btnDataReset').onclick=function(){if(!selected){document.getElementById('meta').textContent='no selected helmet';return;}"
     "paint({});fetch('/api/data_reset?src='+encodeURIComponent(selected)).then(r=>r.json()).then(j=>{document.getElementById('meta').textContent=(j&&j.msg)?j.msg:'no reply';}).catch(()=>{document.getElementById('meta').textContent='reset failed';});};"
-    "document.getElementById('saveLim').onclick=saveLim;loadLim();loadList();setInterval(loadList,2000);</script></body></html>";
+    "document.getElementById('saveLim').onclick=saveLim;loadLim();"
+    "if(location.port==='8888'){document.getElementById('offBox').style.display='block';document.querySelector('h1').textContent='Smart Safety Monitor 관리자';"
+    "function loadOff(){fetch('/api/offsets').then(r=>r.json()).then(j=>{bodyOff.value=j.body;ambOff.value=j.amb;rhOff.value=j.rh;vocOff.value=j.voc;coOff.value=j.co;nh3Off.value=j.nh3;no2Off.value=j.no2;}).catch(()=>{});}"
+    "function saveOff(){var q='body='+encodeURIComponent(bodyOff.value)+'&amb='+encodeURIComponent(ambOff.value)+'&rh='+encodeURIComponent(rhOff.value)+'&voc='+encodeURIComponent(vocOff.value)+'&co='+encodeURIComponent(coOff.value)+'&nh3='+encodeURIComponent(nh3Off.value)+'&no2='+encodeURIComponent(no2Off.value);fetch('/api/offsets?'+q).then(r=>r.json()).then(j=>{document.getElementById('meta').textContent=(j&&j.msg)?j.msg:'offset saved';loadOne();}).catch(()=>{document.getElementById('meta').textContent='offset save failed';});}"
+    "document.getElementById('saveOff').onclick=saveOff;loadOff();}"
+    "loadList();setInterval(loadList,2000);</script></body></html>";
 
 
 struct HelmetLimits {
@@ -2540,6 +2555,63 @@ static void helmetLimitsLoad(void) {
     g_limits.nh3Max = prefs.getFloat("nh3Max", g_limits.nh3Max);
     g_limits.no2Max = prefs.getFloat("no2Max", g_limits.no2Max);
     prefs.end();
+}
+
+struct HelmetOffsets {
+    float body, amb, rh, voc, co, nh3, no2;
+};
+static HelmetOffsets g_offsets = {0, 0, 0, 0, 0, 0, 0};
+
+static void helmetOffsetsLoad(void) {
+    Preferences prefs;
+    if (!prefs.begin("shoff", false)) return;
+    g_offsets.body = prefs.getFloat("body", 0);
+    g_offsets.amb = prefs.getFloat("amb", 0);
+    g_offsets.rh = prefs.getFloat("rh", 0);
+    g_offsets.voc = prefs.getFloat("voc", 0);
+    g_offsets.co = prefs.getFloat("co", 0);
+    g_offsets.nh3 = prefs.getFloat("nh3", 0);
+    g_offsets.no2 = prefs.getFloat("no2", 0);
+    prefs.end();
+    Serial.printf("[HELMET] offsets body %.2f amb %.2f rh %.2f voc %.2f co %.2f nh3 %.2f no2 %.3f\n",
+                  g_offsets.body, g_offsets.amb, g_offsets.rh, g_offsets.voc,
+                  g_offsets.co, g_offsets.nh3, g_offsets.no2);
+}
+
+static void helmetOffsetsSave(void) {
+    Preferences prefs;
+    if (!prefs.begin("shoff", false)) return;
+    prefs.putFloat("body", g_offsets.body);
+    prefs.putFloat("amb", g_offsets.amb);
+    prefs.putFloat("rh", g_offsets.rh);
+    prefs.putFloat("voc", g_offsets.voc);
+    prefs.putFloat("co", g_offsets.co);
+    prefs.putFloat("nh3", g_offsets.nh3);
+    prefs.putFloat("no2", g_offsets.no2);
+    prefs.end();
+}
+
+static String helmetOffsetsJson(void) {
+    String b = "{\"body\":" + String(g_offsets.body, 2);
+    b += ",\"amb\":" + String(g_offsets.amb, 2);
+    b += ",\"rh\":" + String(g_offsets.rh, 2);
+    b += ",\"voc\":" + String(g_offsets.voc, 2);
+    b += ",\"co\":" + String(g_offsets.co, 2);
+    b += ",\"nh3\":" + String(g_offsets.nh3, 2);
+    b += ",\"no2\":" + String(g_offsets.no2, 3);
+    b += ",\"msg\":\"offset saved\"}";
+    return b;
+}
+
+static String helmetWithOffset(const char* raw, float off, int decimals) {
+    if (!raw || !raw[0]) return "";
+    if (!strcmp(raw, "na") || !strcmp(raw, "Disabled")) return String(raw);
+    char* end = nullptr;
+    float v = strtof(raw, &end);
+    if (end == raw) return String(raw);
+    char buf[24];
+    snprintf(buf, sizeof(buf), decimals >= 3 ? "%.3f" : "%.2f", v + off);
+    return String(buf);
 }
 
 static void helmetLimitsSave(void) {
@@ -2601,6 +2673,24 @@ static esp_err_t webLimitsHandler(httpd_req_t* req) {
     }
     String body = helmetLimitsJson();
     return sendWebResponse(req, "application/json", body.c_str(), body.length(), "limits");
+}
+
+static esp_err_t webOffsetsHandler(httpd_req_t* req) {
+    if (httpd_req_get_url_query_len(req) > 0) {
+        g_offsets.body = limQuery(req, "body", g_offsets.body);
+        g_offsets.amb = limQuery(req, "amb", g_offsets.amb);
+        g_offsets.rh = limQuery(req, "rh", g_offsets.rh);
+        g_offsets.voc = limQuery(req, "voc", g_offsets.voc);
+        g_offsets.co = limQuery(req, "co", g_offsets.co);
+        g_offsets.nh3 = limQuery(req, "nh3", g_offsets.nh3);
+        g_offsets.no2 = limQuery(req, "no2", g_offsets.no2);
+        helmetOffsetsSave();
+        Serial.printf("[HELMET] offsets saved body %.2f amb %.2f rh %.2f voc %.2f co %.2f nh3 %.2f no2 %.3f\n",
+                      g_offsets.body, g_offsets.amb, g_offsets.rh, g_offsets.voc,
+                      g_offsets.co, g_offsets.nh3, g_offsets.no2);
+    }
+    String body = helmetOffsetsJson();
+    return sendWebResponse(req, "application/json", body.c_str(), body.length(), "offsets");
 }
 
 static HelmetLive* helmetLiveBySrc(const char* src) {
@@ -2776,13 +2866,13 @@ static esp_err_t webHelmetApiHandler(httpd_req_t* req) {
     body += ",\"motion\":\"" + jsonEscape(live ? live->motion : "") + "\"";
     body += ",\"fall\":\"" + jsonEscape(live ? live->fall : "") + "\"";
     body += ",\"pulse\":\"" + jsonEscape(live ? live->pulse : "") + "\"";
-    body += ",\"body\":\"" + jsonEscape(live ? live->body : "") + "\"";
-    body += ",\"amb\":\"" + jsonEscape(live ? live->amb : "") + "\"";
-    body += ",\"rh\":\"" + jsonEscape(live ? live->rh : "") + "\"";
-    body += ",\"voc\":\"" + jsonEscape(live ? live->voc : "") + "\"";
-    body += ",\"co\":\"" + jsonEscape(live ? live->co : "") + "\"";
-    body += ",\"nh3\":\"" + jsonEscape(live ? live->nh3 : "") + "\"";
-    body += ",\"no2\":\"" + jsonEscape(live ? live->no2 : "") + "\"";
+    body += ",\"body\":\"" + jsonEscape(helmetWithOffset(live ? live->body : "", g_offsets.body, 2)) + "\"";
+    body += ",\"amb\":\"" + jsonEscape(helmetWithOffset(live ? live->amb : "", g_offsets.amb, 2)) + "\"";
+    body += ",\"rh\":\"" + jsonEscape(helmetWithOffset(live ? live->rh : "", g_offsets.rh, 2)) + "\"";
+    body += ",\"voc\":\"" + jsonEscape(helmetWithOffset(live ? live->voc : "", g_offsets.voc, 2)) + "\"";
+    body += ",\"co\":\"" + jsonEscape(helmetWithOffset(live ? live->co : "", g_offsets.co, 2)) + "\"";
+    body += ",\"nh3\":\"" + jsonEscape(helmetWithOffset(live ? live->nh3 : "", g_offsets.nh3, 2)) + "\"";
+    body += ",\"no2\":\"" + jsonEscape(helmetWithOffset(live ? live->no2 : "", g_offsets.no2, 3)) + "\"";
     body += ",\"age_s\":" + String(live ? age : 0);
     body += ",\"has_data\":" + String(live && live->updatedMs ? "true" : "false");
     body += "}";
@@ -2940,13 +3030,14 @@ void notifyWebClients(const char* srcAddr, const char* payload, const char* rawL
     static void serviceWebServerHealth(unsigned long now) {
         static const unsigned long WEB_HEALTH_CHECK_INTERVAL_MS = 5000;
         static const unsigned long WEB_CLIENT_PRESSURE_TIMEOUT_MS = 30000;
-        static const size_t WEB_CLIENT_PRESSURE_LIMIT = 11;
+        static const size_t WEB_CLIENT_PRESSURE_LIMIT = 7;
 
         if (!g_httpServer) return;
         if (g_webRecoveryRequested) {
             Serial.println("[WEB] restarting HTTP server after slow response");
             g_webRecoveryActive = true;
             esp_err_t stopResult = httpd_stop(g_httpServer);
+            if (g_httpAdmin) { httpd_stop(g_httpAdmin); g_httpAdmin = nullptr; }
             if (stopResult == ESP_OK) {
                 g_httpServer = nullptr;
                 g_nextWebRetryMs = now + 1000;
@@ -2990,6 +3081,7 @@ void notifyWebClients(const char* srcAddr, const char* payload, const char* rawL
                   (unsigned)count, now - g_webClientPressureSinceMs);
         g_webRecoveryActive = true;
         esp_err_t stopResult = httpd_stop(g_httpServer);
+        if (g_httpAdmin) { httpd_stop(g_httpAdmin); g_httpAdmin = nullptr; }
         if (stopResult == ESP_OK) {
             g_httpServer = nullptr;
             g_nextWebRetryMs = now + 1000;
@@ -3005,10 +3097,9 @@ void startWebServer() {
 
         httpd_config_t config = HTTPD_DEFAULT_CONFIG();
         config.server_port = 80;
-        config.max_uri_handlers = 20;
-    // LWIP_MAX_SOCKETS=16; httpd uses 3 internal, leaving room for 13 sessions.
-    // Keep one slot available so new UI requests can still reach the server.
-    config.max_open_sockets = 12;
+        config.max_uri_handlers = 24;
+    // Two listeners share LWIP sockets: keep headroom for the admin server.
+    config.max_open_sockets = 8;
     config.backlog_conn = 8;
     config.lru_purge_enable = true;
     config.send_wait_timeout = 10;
@@ -3144,31 +3235,56 @@ void startWebServer() {
             .handler = webHelmetApiHandler,
             .user_ctx = nullptr
         };
+        httpd_uri_t uOffsets = {
+            .uri = "/api/offsets",
+            .method = HTTP_GET,
+            .handler = webOffsetsHandler,
+            .user_ctx = nullptr
+        };
         httpd_uri_t uLegacy = {
             .uri = "/legacy",
             .method = HTTP_GET,
             .handler = webLegacyHandler,
             .user_ctx = nullptr
         };
-        httpd_register_uri_handler(g_httpServer, &uIndex);
-        httpd_register_uri_handler(g_httpServer, &uHelmet);
-        httpd_register_uri_handler(g_httpServer, &uLimits);
-        httpd_register_uri_handler(g_httpServer, &uLegacy);
-        httpd_register_uri_handler(g_httpServer, &uStatus);
-        httpd_register_uri_handler(g_httpServer, &uCells);
-        httpd_register_uri_handler(g_httpServer, &uLayout);
-        httpd_register_uri_handler(g_httpServer, &uWs);
-        httpd_register_uri_handler(g_httpServer, &uFireClear);
-        httpd_register_uri_handler(g_httpServer, &uDataReset);
-        httpd_register_uri_handler(g_httpServer, &uHelmets);
-        httpd_register_uri_handler(g_httpServer, &uHelmetMeta);
-        httpd_register_uri_handler(g_httpServer, &uHelmetDelete);
-        httpd_register_uri_handler(g_httpServer, &uCheckInterval);
-        httpd_register_uri_handler(g_httpServer, &uStatusCheck);
-        httpd_register_uri_handler(g_httpServer, &uNetworkCheck);
-        httpd_register_uri_handler(g_httpServer, &uPacketStream);
-        httpd_register_uri_handler(g_httpServer, &uFwVersion);
-        httpd_register_uri_handler(g_httpServer, &uOtaUpdate);
+        if (!g_httpAdmin) {
+            httpd_config_t adminCfg = HTTPD_DEFAULT_CONFIG();
+            adminCfg.server_port = 8888;
+            adminCfg.ctrl_port = 32769;
+            adminCfg.max_uri_handlers = 24;
+            adminCfg.max_open_sockets = 3;
+            adminCfg.backlog_conn = 2;
+            adminCfg.lru_purge_enable = true;
+            adminCfg.send_wait_timeout = 10;
+            if (httpd_start(&g_httpAdmin, &adminCfg) != ESP_OK) {
+                g_httpAdmin = nullptr;
+                Serial.println("[WEB] admin port 8888 failed");
+            }
+        }
+        auto reg = [](const httpd_uri_t* u) {
+            httpd_register_uri_handler(g_httpServer, u);
+            if (g_httpAdmin) httpd_register_uri_handler(g_httpAdmin, u);
+        };
+        reg(&uIndex);
+        reg(&uHelmet);
+        reg(&uLimits);
+        reg(&uOffsets);
+        reg(&uLegacy);
+        reg(&uStatus);
+        reg(&uCells);
+        reg(&uLayout);
+        reg(&uWs);
+        reg(&uFireClear);
+        reg(&uDataReset);
+        reg(&uHelmets);
+        reg(&uHelmetMeta);
+        reg(&uHelmetDelete);
+        reg(&uCheckInterval);
+        reg(&uStatusCheck);
+        reg(&uNetworkCheck);
+        reg(&uPacketStream);
+        reg(&uFwVersion);
+        reg(&uOtaUpdate);
 
         g_nextWebRetryMs = 0;
         IPAddress staIp = WiFi.localIP();
@@ -3178,6 +3294,9 @@ void startWebServer() {
         }
         if (static_cast<uint32_t>(apIp) != 0) {
             Serial.printf("[WEB] UI ready (AP):  http://%s/\n", apIp.toString().c_str());
+        }
+        if (g_httpAdmin) {
+            Serial.println("[WEB] admin UI: port 8888");
         }
 }
 
@@ -5148,6 +5267,7 @@ void setup() {
     loadConfig();
     loadRuntimeState();
     helmetLimitsLoad();
+    helmetOffsetsLoad();
     helmetDirLoad();
     updateBluetoothDeviceName();
 
