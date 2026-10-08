@@ -2150,6 +2150,7 @@ struct HelmetLive {
     char nh3[12];
     char no2[12];
     uint32_t updatedMs;
+    bool fallLatched;
 };
 static HelmetId* g_helmetDir = nullptr;
 static int g_helmetDirCount = 0;
@@ -2439,6 +2440,12 @@ static void ingestHelmetText(const char* src, const char* payload) {
             strncpy(g_helmetLive[li].co, g_helmet.co, sizeof(g_helmetLive[li].co) - 1);
             strncpy(g_helmetLive[li].nh3, g_helmet.nh3, sizeof(g_helmetLive[li].nh3) - 1);
             strncpy(g_helmetLive[li].no2, g_helmet.no2, sizeof(g_helmetLive[li].no2) - 1);
+            if (strcasecmp(g_helmet.fall, "yes") == 0) g_helmetLive[li].fallLatched = true;
+            /* Keep 낙상의심=예 until the web 초기화 button clears this helmet. */
+            if (g_helmetLive[li].fallLatched) {
+                strncpy(g_helmetLive[li].fall, "yes", sizeof(g_helmetLive[li].fall) - 1);
+                strncpy(g_helmet.fall, "yes", sizeof(g_helmet.fall) - 1);
+            }
             g_helmetLive[li].updatedMs = millis();
         }
     }
