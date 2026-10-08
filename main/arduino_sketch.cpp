@@ -2447,7 +2447,7 @@ static void ingestHelmetText(const char* src, const char* payload) {
 static const char HELMET_HTML[] =
     "<!DOCTYPE html><html><head><meta charset='utf-8'>"
     "<meta name='viewport' content='width=device-width,initial-scale=1'>"
-    "<title>Smart Safety Monitor by JJSYSTEM</title><style>"
+    "<title>Smart Safety Monitor</title><style>"
     "body{font-family:sans-serif;background:#101418;color:#e8eef2;margin:0}"
     "header{padding:16px 20px;background:#182028}"
     "h1{margin:0;font-size:22px}"
