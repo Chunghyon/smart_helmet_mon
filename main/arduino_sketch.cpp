@@ -2501,7 +2501,8 @@ static const char HELMET_HTML[] =
     "<label>CO<input id='coOff' type='number' step='0.01'></label>"
     "<label>NH3<input id='nh3Off' type='number' step='0.01'></label>"
     "<label>NO2<input id='no2Off' type='number' step='0.001'></label>"
-    "<button id='saveOff' type='button'>offset저장</button></div></section>"
+    "<button id='saveOff' type='button'>offset저장</button></div>"
+    "<div class='meta' id='offMsg'></div></section>"
     "<script>"
     "const keys=['fall','motion','pulse','body','amb','rh','voc','co','nh3','no2'];""const names={motion:'활동감지',fall:'낙상의심',pulse:'생체미세움직임',body:'체온',amb:'주변온도',rh:'습도',voc:'VOC',co:'일산화탄소(CO)',nh3:'암모니아(NH3)',no2:'이산화질소(NO2)'};"
     "let selected='';"
@@ -2528,10 +2529,10 @@ static const char HELMET_HTML[] =
     "document.getElementById('btnDataReset').onclick=function(){if(!selected){document.getElementById('meta').textContent='no selected helmet';return;}"
     "paint({});fetch('/api/data_reset?src='+encodeURIComponent(selected)).then(r=>r.json()).then(j=>{document.getElementById('meta').textContent=(j&&j.msg)?j.msg:'no reply';}).catch(()=>{document.getElementById('meta').textContent='reset failed';});};"
     "document.getElementById('saveLim').onclick=saveLim;loadLim();"
-    "if(location.port==='8888'){document.getElementById('offBox').style.display='block';document.querySelector('h1').textContent='Smart Safety Monitor 관리자';"
+    "if(location.port==='8888'){document.title='관리자 모드';document.getElementById('offBox').style.display='block';document.querySelector('h1').textContent='Smart Safety Monitor 관리자';"
     "document.getElementById('routerBox').style.display='none';document.getElementById('meta').style.display='none';document.getElementById('grid').style.display='none';document.getElementById('limBox').style.display='none';"
     "function loadOff(){fetch('/api/offsets').then(r=>r.json()).then(j=>{bodyOff.value=j.body;ambOff.value=j.amb;rhOff.value=j.rh;vocOff.value=j.voc;coOff.value=j.co;nh3Off.value=j.nh3;no2Off.value=j.no2;}).catch(()=>{});}"
-    "function saveOff(){var q='body='+encodeURIComponent(bodyOff.value)+'&amb='+encodeURIComponent(ambOff.value)+'&rh='+encodeURIComponent(rhOff.value)+'&voc='+encodeURIComponent(vocOff.value)+'&co='+encodeURIComponent(coOff.value)+'&nh3='+encodeURIComponent(nh3Off.value)+'&no2='+encodeURIComponent(no2Off.value);fetch('/api/offsets?'+q).then(r=>r.json()).then(j=>{document.querySelector('h1').textContent='offset 저장됨';loadOff();}).catch(()=>{document.querySelector('h1').textContent='offset 저장 실패';});}"
+    "function saveOff(){var q='body='+encodeURIComponent(bodyOff.value)+'&amb='+encodeURIComponent(ambOff.value)+'&rh='+encodeURIComponent(rhOff.value)+'&voc='+encodeURIComponent(vocOff.value)+'&co='+encodeURIComponent(coOff.value)+'&nh3='+encodeURIComponent(nh3Off.value)+'&no2='+encodeURIComponent(no2Off.value);fetch('/api/offsets?'+q).then(r=>r.json()).then(j=>{document.getElementById('offMsg').textContent='offset 저장됨';loadOff();}).catch(()=>{document.getElementById('offMsg').textContent='offset 저장 실패';});}"
     "document.getElementById('saveOff').onclick=saveOff;loadOff();}else{loadList();setInterval(loadList,2000);}</script></body></html>";
 
 
