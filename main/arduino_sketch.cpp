@@ -2152,6 +2152,10 @@ struct HelmetLive {
     char no2[12];
     uint32_t updatedMs;
     bool fallLatched;
+    float shown[7];
+    float pending[7];
+    uint8_t pendN[7];
+    uint8_t haveShown;
 };
 static HelmetId* g_helmetDir = nullptr;
 static int g_helmetDirCount = 0;
@@ -2615,6 +2619,46 @@ static String helmetWithOffset(const char* raw, float off, int decimals) {
     return String(buf);
 }
 
+/* body, amb, rh, voc, co, nh3, no2. A single glitch keeps the last value.
+ * The same out-of-range value on 3 reports in a row is accepted. */
+static String helmetStable(HelmetLive* live, int idx, const char* raw, float off,
+                           int decimals, float jump, bool gas) {
+    String cur = helmetWithOffset(raw, off, decimals);
+    if (!live || !cur.length() || cur == "na" || cur == "Disabled") return cur;
+    char* end = nullptr;
+    float v = strtof(cur.c_str(), &end);
+    if (end == cur.c_str()) return cur;
+    if (gas) {
+        float floor = decimals >= 3 ? 0.001f : 0.01f;
+        if (v < floor) v = floor;
+    }
+    uint8_t bit = (uint8_t)(1u << idx);
+    if (!(live->haveShown & bit)) {
+        live->shown[idx] = v;
+        live->haveShown |= bit;
+        live->pendN[idx] = 0;
+    } else if (fabsf(v - live->shown[idx]) > jump) {
+        if (live->pendN[idx] && fabsf(v - live->pending[idx]) <= jump) {
+            live->pendN[idx]++;
+        } else {
+            live->pending[idx] = v;
+            live->pendN[idx] = 1;
+        }
+        if (live->pendN[idx] >= 3) {
+            live->shown[idx] = v;
+            live->pendN[idx] = 0;
+        } else {
+            v = live->shown[idx];
+        }
+    } else {
+        live->shown[idx] = v;
+        live->pendN[idx] = 0;
+    }
+    char buf[24];
+    snprintf(buf, sizeof(buf), decimals >= 3 ? "%.3f" : "%.2f", v);
+    return String(buf);
+}
+
 static void helmetLimitsSave(void) {
     Preferences prefs;
     if (!prefs.begin("shlim", false)) return;
@@ -2867,13 +2911,13 @@ static esp_err_t webHelmetApiHandler(httpd_req_t* req) {
     body += ",\"motion\":\"" + jsonEscape(live ? live->motion : "") + "\"";
     body += ",\"fall\":\"" + jsonEscape(live ? live->fall : "") + "\"";
     body += ",\"pulse\":\"" + jsonEscape(live ? live->pulse : "") + "\"";
-    String bodyShown = helmetWithOffset(live ? live->body : "", g_offsets.body, 2);
-    String ambShown = helmetWithOffset(live ? live->amb : "", g_offsets.amb, 2);
-    String rhShown = helmetWithOffset(live ? live->rh : "", g_offsets.rh, 2);
-    String vocShown = helmetWithOffset(live ? live->voc : "", g_offsets.voc, 2);
-    String coShown = helmetWithOffset(live ? live->co : "", g_offsets.co, 2);
-    String nh3Shown = helmetWithOffset(live ? live->nh3 : "", g_offsets.nh3, 2);
-    String no2Shown = helmetWithOffset(live ? live->no2 : "", g_offsets.no2, 3);
+    String bodyShown = helmetStable(live, 0, live ? live->body : "", g_offsets.body, 2, 3.0f, true);
+    String ambShown = helmetStable(live, 1, live ? live->amb : "", g_offsets.amb, 2, 5.0f, false);
+    String rhShown = helmetStable(live, 2, live ? live->rh : "", g_offsets.rh, 2, 20.0f, false);
+    String vocShown = helmetStable(live, 3, live ? live->voc : "", g_offsets.voc, 2, 10.0f, true);
+    String coShown = helmetStable(live, 4, live ? live->co : "", g_offsets.co, 2, 5.0f, true);
+    String nh3Shown = helmetStable(live, 5, live ? live->nh3 : "", g_offsets.nh3, 2, 10.0f, true);
+    String no2Shown = helmetStable(live, 6, live ? live->no2 : "", g_offsets.no2, 3, 0.05f, true);
     body += ",\"body\":\"" + jsonEscape(bodyShown.c_str()) + "\"";
     body += ",\"amb\":\"" + jsonEscape(ambShown.c_str()) + "\"";
     body += ",\"rh\":\"" + jsonEscape(rhShown.c_str()) + "\"";
