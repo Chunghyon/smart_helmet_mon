@@ -64,8 +64,13 @@ void saveCheckIntervalConfig();
 #define GREEN_LED_PIN 27
 
 // Multicast group (used when replying to field nodes)
-#define MULTICAST_ADDRESS_DEFAULT "<ff15::810a:64d1>"
+// Changed from the module default (ff15::810a:64d1). Do not include <>.
+#define MULTICAST_ADDRESS_DEFAULT "ff15::b1c2:d3e1"
 char MULTICAST_ADDRESS[40] = MULTICAST_ADDRESS_DEFAULT;
+
+// Broadcast address (module default is ff15::810a:64ff).
+#define BROADCAST_ADDRESS_DEFAULT "ff15::b1c2:d3ff"
+char BROADCAST_ADDRESS[40] = BROADCAST_ADDRESS_DEFAULT;
 
 // BR unicast IPv6 for helmet nodes to target (must match SMART_HELMET_WISUN_BR_ADDR)
 // Use this module's actual globalIPv6Address once known; default matches common prefix.
@@ -4187,7 +4192,7 @@ void processLine(const char* line) {
             if (strlen(src) > 0)
                 snprintf(reply, sizeof(reply), "udpr<%s>:BRD_%s,Network OK\r\n", src, rn);
             else
-                snprintf(reply, sizeof(reply), "udpr%s:BRD_%s,Network OK\r\n", MULTICAST_ADDRESS, rn);
+                snprintf(reply, sizeof(reply), "udpr<%s>:BRD_%s,Network OK\r\n", MULTICAST_ADDRESS, rn);
             WiSUNSerial.print(reply);
             WiSUNSerial.flush();
             Serial.println("[WiSUN TX] Network OK reply sent.");
@@ -4351,14 +4356,20 @@ void initializeWiSUN() {
     sendCommand("param set cca_threshold -83\r\n"); if (abortableDelay(500)) goto wisun_aborted;
     setWiSUNChrateVerified(wiSunChrate);           if (abortableDelay(200)) goto wisun_aborted;
     {
+        // PDF 2.14: udpopts [opt] [para], not "udpopts set". Address has no <>.
+        // Takes effect after svrst below.
         String r = sendCommand("udpopts\r\n"); if (abortableDelay(500)) goto wisun_aborted;
         if (r.indexOf(MULTICAST_ADDRESS) == -1) {
-            char c[64]; snprintf(c, sizeof(c), "udpopts set multicast %s\r\n", MULTICAST_ADDRESS);
+            char c[80]; snprintf(c, sizeof(c), "udpopts multicast %s\r\n", MULTICAST_ADDRESS);
+            sendCommand(c); if (abortableDelay(500)) goto wisun_aborted;
+        }
+        if (r.indexOf(BROADCAST_ADDRESS) == -1) {
+            char c[80]; snprintf(c, sizeof(c), "udpopts broadcast %s\r\n", BROADCAST_ADDRESS);
             sendCommand(c); if (abortableDelay(500)) goto wisun_aborted;
         }
     }
-    sendCommand("udpopts set disp_source on\r\n");  if (abortableDelay(500)) goto wisun_aborted;
-    sendCommand("udpopts set udp_port 1234\r\n");   if (abortableDelay(500)) goto wisun_aborted;
+    sendCommand("udpopts disp_source on\r\n");  if (abortableDelay(500)) goto wisun_aborted;
+    sendCommand("udpopts udp_port 4321\r\n");   if (abortableDelay(500)) goto wisun_aborted;
     sendCommand("param save\r\n");                  if (abortableDelay(500)) goto wisun_aborted;
     sendCommand("svrst\r\n");                       if (abortableDelay(5000)) goto wisun_aborted;
 
@@ -4387,10 +4398,17 @@ void initializeWiSUN() {
         String r = sendCommand("param\r\n"); delay(500);
         auto parseAddr = [&](const char* tag, char* out, size_t outLen, const char* fb) {
             int ti = r.indexOf(tag);
-            if (ti != -1) { int s = r.lastIndexOf("<", ti); int e = r.indexOf(">", ti);
-                if (s != -1 && e != -1) { r.substring(s+1, e).toCharArray(out, outLen); return; }
+            if (ti != -1) {
+                // Format is <address>(tag). The closing > is before the tag.
+                int e = r.lastIndexOf(">", ti);
+                int s = (e != -1) ? r.lastIndexOf("<", e) : -1;
+                if (s != -1 && e != -1 && e > s) {
+                    r.substring(s + 1, e).toCharArray(out, outLen);
+                    return;
+                }
             }
-            strncpy(out, fb, outLen-1); out[outLen-1]='\0';
+            strncpy(out, fb, outLen - 1);
+            out[outLen - 1] = '\0';
         };
         parseAddr("(global)", globalIPv6Address, sizeof(globalIPv6Address), BR_UNICAST_ADDRESS);
         parseAddr("(local)",  localIPv6Address,  sizeof(localIPv6Address),  "fe80::1");
@@ -4462,7 +4480,10 @@ void loadConfig() {
         wifiApPASS[sizeof(wifiApPASS) - 1] = '\0';
     }
 
-    if (strlen(MULTICAST_ADDRESS) == 0) {
+    if (strlen(MULTICAST_ADDRESS) == 0 ||
+        strcmp(MULTICAST_ADDRESS, "<ff15::810a:64d1>") == 0 ||
+        strcmp(MULTICAST_ADDRESS, "ff15::810a:64d1") == 0 ||
+        strcmp(MULTICAST_ADDRESS, "<ff15::b1c2:d3e1>") == 0) {
         strncpy(MULTICAST_ADDRESS, MULTICAST_ADDRESS_DEFAULT, sizeof(MULTICAST_ADDRESS) - 1);
         MULTICAST_ADDRESS[sizeof(MULTICAST_ADDRESS) - 1] = '\0';
     }
@@ -4934,7 +4955,7 @@ void inputWiSUNParamSettings() {
     }
 
     char mtmp[40] = "";
-    readSerialInput("Multicast address (ex: ff15::810a:64d1)", MULTICAST_ADDRESS, mtmp, sizeof(mtmp));
+    readSerialInput("Multicast address (ex: ff15::b1c2:d3e1)", MULTICAST_ADDRESS, mtmp, sizeof(mtmp));
     if (strlen(mtmp) > 0) {
         String s = String(mtmp);
         s.trim();
@@ -5044,17 +5065,51 @@ void printBorderRouterAddress() {
     SerialBT.println("[BR] Address Info");
 
     if (!wiSunInitialized) {
-        Serial.println("[BR] Wi-SUN not initialized. Run 'n' first.");
-        SerialBT.println("[BR] Not initialized. Use 'n'.");
+        Serial.println("[BR] Wi-SUN not initialized. Run 'i' first.");
+        SerialBT.println("[BR] Not initialized. Use 'i'.");
         return;
+    }
+
+    // Re-query so the display is always current (param and ip both use <addr>(tag)).
+    String r = sendCommand("param\r\n");
+    delay(200);
+    if (r.indexOf("(global)") == -1 && r.indexOf("(local)") == -1) {
+        r = sendCommand("ip\r\n");
+        delay(200);
+    }
+
+    auto parseAddr = [&](const char* tag, char* out, size_t outLen, const char* fb) {
+        int ti = r.indexOf(tag);
+        if (ti != -1) {
+            int e = r.lastIndexOf(">", ti);
+            int s = (e != -1) ? r.lastIndexOf("<", e) : -1;
+            if (s != -1 && e != -1 && e > s) {
+                r.substring(s + 1, e).toCharArray(out, outLen);
+                return;
+            }
+        }
+        strncpy(out, fb, outLen - 1);
+        out[outLen - 1] = '\0';
+    };
+
+    parseAddr("(global)", globalIPv6Address, sizeof(globalIPv6Address), BR_UNICAST_ADDRESS);
+    parseAddr("(local)",  localIPv6Address,  sizeof(localIPv6Address),  "fe80::1");
+
+    if (strlen(globalIPv6Address) > 0 &&
+        strcmp(globalIPv6Address, BR_UNICAST_ADDRESS) != 0 &&
+        strstr(globalIPv6Address, "::") != NULL) {
+        strncpy(brUnicastAddress, globalIPv6Address, sizeof(brUnicastAddress) - 1);
+        brUnicastAddress[sizeof(brUnicastAddress) - 1] = '\0';
     }
 
     Serial.printf("[BR] Global IPv6: %s\n", strlen(globalIPv6Address) ? globalIPv6Address : "(empty)");
     Serial.printf("[BR] Local  IPv6: %s\n", strlen(localIPv6Address)  ? localIPv6Address  : "(empty)");
+    Serial.printf("[BR] Helmet target (unicast): %s\n", brUnicastAddress);
     Serial.printf("[BR] Link state : %s\n", isWiSUNConnected ? "Connected" : "Init(not connected)");
 
     SerialBT.printf("[BR] Global: %s\n", strlen(globalIPv6Address) ? globalIPv6Address : "(empty)");
     SerialBT.printf("[BR] Local : %s\n", strlen(localIPv6Address)  ? localIPv6Address  : "(empty)");
+    SerialBT.printf("[BR] Helmet target: %s\n", brUnicastAddress);
 }
 
 void printConnectedNodes() {
