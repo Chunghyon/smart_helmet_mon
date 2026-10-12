@@ -69,7 +69,7 @@ char MULTICAST_ADDRESS[40] = MULTICAST_ADDRESS_DEFAULT;
 
 // BR unicast IPv6 for helmet nodes to target (must match SMART_HELMET_WISUN_BR_ADDR)
 // Use this module's actual globalIPv6Address once known; default matches common prefix.
-#define BR_UNICAST_ADDRESS "2020:abcd::1"
+#define BR_UNICAST_ADDRESS "2020:dcba::99"
 char brUnicastAddress[40] = BR_UNICAST_ADDRESS;
 
 char globalIPv6Address[40] = "";
