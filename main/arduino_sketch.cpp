@@ -67,6 +67,11 @@ void saveCheckIntervalConfig();
 #define MULTICAST_ADDRESS_DEFAULT "<ff15::810a:64d1>"
 char MULTICAST_ADDRESS[40] = MULTICAST_ADDRESS_DEFAULT;
 
+// BR unicast IPv6 for helmet nodes to target (must match SMART_HELMET_WISUN_BR_ADDR)
+// Use this module's actual globalIPv6Address once known; default matches common prefix.
+#define BR_UNICAST_ADDRESS "2020:abcd::1"
+char brUnicastAddress[40] = BR_UNICAST_ADDRESS;
+
 char globalIPv6Address[40] = "";
 char localIPv6Address[40]  = "";
 
@@ -4390,6 +4395,11 @@ void initializeWiSUN() {
         parseAddr("(global)", globalIPv6Address, sizeof(globalIPv6Address), "2020:abcd::1");
         parseAddr("(local)",  localIPv6Address,  sizeof(localIPv6Address),  "fe80::1");
         Serial.printf("[WiSUN] Global: %s  Local: %s\n", globalIPv6Address, localIPv6Address);
+        if (strlen(globalIPv6Address) > 0 && strcmp(globalIPv6Address, "2020:abcd::1") != 0) {
+            strncpy(brUnicastAddress, globalIPv6Address, sizeof(brUnicastAddress) - 1);
+            brUnicastAddress[sizeof(brUnicastAddress) - 1] = '\0';
+        }
+        Serial.printf("[WiSUN] Helmets should target BR unicast: %s\n", brUnicastAddress);
     }
 
     wiSunInitialized = true; isWiSUNSettingUp = false;
