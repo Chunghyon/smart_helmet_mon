@@ -4392,10 +4392,10 @@ void initializeWiSUN() {
             }
             strncpy(out, fb, outLen-1); out[outLen-1]='\0';
         };
-        parseAddr("(global)", globalIPv6Address, sizeof(globalIPv6Address), "2020:abcd::1");
+        parseAddr("(global)", globalIPv6Address, sizeof(globalIPv6Address), BR_UNICAST_ADDRESS);
         parseAddr("(local)",  localIPv6Address,  sizeof(localIPv6Address),  "fe80::1");
         Serial.printf("[WiSUN] Global: %s  Local: %s\n", globalIPv6Address, localIPv6Address);
-        if (strlen(globalIPv6Address) > 0 && strcmp(globalIPv6Address, "2020:abcd::1") != 0) {
+        if (strlen(globalIPv6Address) > 0 && strcmp(globalIPv6Address, BR_UNICAST_ADDRESS) != 0) {
             strncpy(brUnicastAddress, globalIPv6Address, sizeof(brUnicastAddress) - 1);
             brUnicastAddress[sizeof(brUnicastAddress) - 1] = '\0';
         }
